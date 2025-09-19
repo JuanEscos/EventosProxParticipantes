@@ -12,7 +12,7 @@ on:
         required: false
         default: "25"
   schedule:
-    # Nota: el cron es en UTC. 03:40 UTC ~ 05:40 Europe/Madrid (según DST)
+    # 03:40 UTC ≈ 05:40 Europe/Madrid (según DST)
     - cron: "40 3 * * *"
 
 permissions:
@@ -31,7 +31,8 @@ jobs:
       TZ: Europe/Madrid
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      # ---- Scraper ENV por defecto (puedes ajustarlos aquí o vía workflow_dispatch) ----
+
+      # ---- Scraper ENV (puedes ajustarlos aquí o en workflow_dispatch) ----
       HEADLESS: "true"
       INCOGNITO: "true"
       OUT_DIR: "./output"
@@ -39,7 +40,8 @@ jobs:
       SCROLL_WAIT_S: "2.0"
       LIMIT_EVENTS: "${{ github.event.inputs.limit_events || '35' }}"
       MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '25' }}"
-      # Throttling y resume (02EventosProxParticipantesGitHubGPT.py)
+
+      # Throttling + resume (02EventosProxParticipantesGitHubGPT.py)
       THROTTLE_EVENT_S: "3.0"
       THROTTLE_PAGE_MIN_S: "1.2"
       THROTTLE_PAGE_MAX_S: "2.5"
@@ -48,7 +50,8 @@ jobs:
       AUTO_SAVE_EVERY: "10"
       RESUME: "true"
       RESUME_FILE: ""
-      # Credenciales (usar Secrets del repo/org)
+
+      # Credenciales Flow (usar Secrets)
       FLOW_EMAILRq: "${{ secrets.FLOW_EMAILRQ }}"
       FLOW_PASSRq: "${{ secrets.FLOW_PASSRQ }}"
 
@@ -69,15 +72,11 @@ jobs:
 
       - name: Install chromedriver
         uses: nanasess/setup-chromedriver@v2
-        with:
-          # se ajusta automáticamente a la versión instalada de Chrome
-          # chromedriver-version: latest
-          # no es necesario especificar versión salvo que quieras fijarla
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Show Chrome versions
         run: |
           google-chrome --version || true
+          google-chrome-stable --version || true
           chromedriver --version || true
 
       - name: Install Python deps
@@ -96,10 +95,8 @@ jobs:
           ls -la "${OUT_DIR}" || true
 
       - name: Run Python scraper (events + participants)
-        # Subimos el límite de tiempo de ESTE paso (además del job)
         timeout-minutes: 60
         env:
-          # Repetimos env clave por si este paso se corre aislado
           HEADLESS: "${{ env.HEADLESS }}"
           INCOGNITO: "${{ env.INCOGNITO }}"
           OUT_DIR: "${{ env.OUT_DIR }}"
@@ -122,21 +119,174 @@ jobs:
           python ./02EventosProxParticipantesGitHubGPT.py --module all
           echo "=== SCRAPER COMPLETADO ==="
 
-      - name: List output
-        if: always()
+      - name: Verify generated files
         run: |
-          echo "OUT_DIR contents (after):"
-          ls -la "${OUT_DIR}" || true
-          echo ""
-          echo "Disk usage:"
-          du -h "${OUT_DIR}" || true
+          echo '=== VERIFICANDO ARCHIVOS GENERADOS ==='
+          ls -la ./output/ || true
 
-      - name: Upload artifact (output)
+          # Requerido siempre:
+          MUST_HAVE=("01events.json")
+          # Al menos uno de estos:
+          ONE_OF=("02info.json" "participantes_detallados.json")
+
+          missing=0
+          for file in "${MUST_HAVE[@]}"; do
+            if [ -f "./output/$file" ]; then
+              sz=$(stat -c%s "./output/$file")
+              echo "✅ $file: ENCONTRADO (${sz} bytes)"
+            else
+              echo "❌ $file: NO ENCONTRADO"
+              missing=$((missing+1))
+            fi
+          done
+
+          # Comprobar que exista al menos uno de los opcionales
+          found_optional=0
+          for opt in "${ONE_OF[@]}"; do
+            if [ -f "./output/$opt" ]; then
+              sz=$(stat -c%s "./output/$opt")
+              echo "✅ $opt: ENCONTRADO (${sz} bytes)"
+              found_optional=1
+            else
+              echo "⚠️  $opt: no encontrado"
+            fi
+          done
+
+          if [ $missing -eq 0 ] && [ $found_optional -eq 1 ]; then
+            echo "✅ Archivos mínimos presentes"
+          else
+            echo "❌ Faltan archivos requeridos (01events.json) o ninguno de (02info.json|participantes_detallados.json)"
+            exit 1
+          fi
+
+      - name: Compress JSON files for FTP
+        run: |
+          echo "=== COMPRIMIENDO ARCHIVOS PARA FTP ==="
+          to_compress=( "01events.json" "02info.json" "participantes_detallados.json" )
+          for f in "${to_compress[@]}"; do
+            if [ -f "./output/$f" ]; then
+              echo "Comprimiendo: $f"
+              gzip -9 -c "./output/$f" > "./output/${f}.gz"
+              orig=$(stat -c%s "./output/$f")
+              comp=$(stat -c%s "./output/${f}.gz")
+              ratio=$(( comp * 100 / orig ))
+              echo "  $orig bytes → $comp bytes (${ratio}%)"
+            fi
+          done
+          echo "=== ARCHIVOS COMPRIMIDOS ==="
+          ls -la ./output/*.gz || true
+
+      - name: Upload compressed files to FTP
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          echo '=== SUBIENDO ARCHIVOS COMPRIMIDOS ==='
+
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "❌ ERROR: Variables FTP no configuradas correctamente"
+            exit 1
+          fi
+
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Subiendo a: ${BASE_URL}/"
+
+          # Construye lista según existan
+          COMPRESSED_FILES=()
+          for f in "01events.json.gz" "02info.json.gz" "participantes_detallados.json.gz"; do
+            [ -f "./output/$f" ] && COMPRESSED_FILES+=("$f")
+          done
+
+          if [ ${#COMPRESSED_FILES[@]} -eq 0 ]; then
+            echo "❌ No hay archivos comprimidos para subir"
+            exit 1
+          fi
+
+          for file in "${COMPRESSED_FILES[@]}"; do
+            local_file="./output/$file"
+            echo "📤 Subiendo: $file"
+            curl --fail \
+                 --ssl-reqd \
+                 --ftp-create-dirs \
+                 --disable-epsv \
+                 --ftp-skip-pasv-ip \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "$local_file" \
+                 "${BASE_URL}/$file" \
+            && echo "✅ $file subido" || {
+              echo "❌ Error subiendo $file"
+              # Intentar el original sin comprimir
+              orig="${file%.gz}"
+              if [ -f "./output/$orig" ]; then
+                echo "🔄 Intentando subir original: $orig"
+                curl --fail \
+                     --ssl-reqd \
+                     --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                     --upload-file "./output/$orig" \
+                     "${BASE_URL}/$orig" \
+                && echo "✅ $orig subido" || echo "❌ Error subiendo $orig también"
+              fi
+            }
+            sleep 1
+          done
+
+          # Subir 01events.json sin comprimir (pequeño) si existe
+          if [ -f "./output/01events.json" ]; then
+            echo "📤 Subiendo 01events.json (sin comprimir)"
+            curl --fail \
+                 --ssl-reqd \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "./output/01events.json" \
+                 "${BASE_URL}/01events.json" \
+            && echo "✅ 01events.json subido" || echo "⚠️  No se pudo subir 01events.json"
+          fi
+
+      - name: Create backup directory
+        run: mkdir -p ./backup
+
+      - name: Backup uncompressed files
+        run: |
+          echo "=== CREANDO BACKUP LOCAL ==="
+          [ -f ./output/01events.json ] && cp ./output/01events.json ./backup/ || true
+          [ -f ./output/02info.json ] && cp ./output/02info.json ./backup/ || true
+          [ -f ./output/participantes_detallados.json ] && cp ./output/participantes_detallados.json ./backup/ || true
+          echo "Backup creado en ./backup/"
+          ls -la ./backup/ || true
+
+      - name: Upload backup as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: output-${{ github.run_id }}
-          path: |
-            ${{ env.OUT_DIR }}/
+          name: json-backup-uncompressed
+          path: ./backup/*.json
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Upload compressed files as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: json-compressed
+          path: ./output/*.gz
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          echo "=== DEBUGGING FAILURE ==="
+          echo "output/:"
+          ls -la ./output/ 2>/dev/null || echo "No output directory"
+          echo "backup/:"
+          ls -la ./backup/ 2>/dev/null || echo "No backup directory"
+          echo "=== CHROME ==="
+          which google-chrome || true
+          which google-chrome-stable || true
+          which chromedriver || true
+          echo "=== FILE SIZES ==="
+          for f in ./output/*.json ./output/*.gz; do
+            [ -f "$f" ] && echo "$(basename "$f"): $(stat -c%s "$f") bytes"
+          done || true
