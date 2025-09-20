@@ -401,21 +401,41 @@ def _accept_cookies(driver):
             except:
                 continue
                 
-        # Fallback con JavaScript
-        driver.execute_script(#
-            const buttons = document.querySelectorAll('button');
-            for (const btn of buttons) {
-                if (/aceptar|accept|consent|agree/i.test(btn.textContent)) {
-                    btn.click();
+def accept_cookies_fallback(driver):
+    """
+    Versión mejorada con más opciones de búsqueda
+    """
+    try:
+        script = """
+        // Buscar en diferentes tipos de elementos
+        const selectors = ['button', 'a', 'div[role="button"]', 'span.cookie-button'];
+        let clicked = false;
+        
+        for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            for (const el of elements) {
+                const text = el.textContent?.toLowerCase() || '';
+                const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
+                
+                if (/aceptar|accept|consent|agree|allow|permitir|ok|confirmar|confirm/i.test(text) ||
+                    /aceptar|accept|consent|agree|allow|permitir|ok|confirmar|confirm/i.test(ariaLabel)) {
+                    
+                    el.click();
+                    clicked = true;
                     break;
                 }
             }
-        )
+            if (clicked) break;
+        }
+        return clicked;
+        """
+        
+        result = driver.execute_script(script)
         slow_pause(0.5, 1)
-        return True
+        return bool(result)
         
     except Exception as e:
-        log(f"Error manejando cookies: {e}")
+        print(f"Error en fallback JavaScript: {e}")
         return False
 
 def _full_scroll(driver):
