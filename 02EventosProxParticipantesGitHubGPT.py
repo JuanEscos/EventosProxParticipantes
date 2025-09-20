@@ -380,63 +380,89 @@ def _login(driver):
         log(f"Traceback: {traceback.format_exc()}")
         return False
 
-def _accept_cookies(driver):
-    #Aceptar cookies si es necesario
+# ================= COOKIE HELPERS (reemplazo seguro) =================
+
+def _accept_cookies(driver) -> bool:
+    """Intenta aceptar cookies por selectores comunes; si falla, usa un fallback JS."""
+    if not driver:
+        return False
     try:
         cookie_selectors = [
-            'button[aria-label="Accept all"]',
-            'button[aria-label="Aceptar todo"]',
-            '[data-testid="uc-accept-all-button"]',
-            'button[mode="primary"]'
+            "[data-testid='uc-accept-all-button']",
+            "button[aria-label='Accept all']",
+            "button[aria-label='Aceptar todo']",
+            "button[mode='primary']",
+            "button:contains('Aceptar')",      # no estándar, por si hay lib que lo soporte
+            "button:contains('Accept')",
         ]
-        
-        for selector in cookie_selectors:
+
+        # Intento 1: selectores directos
+        clicked = False
+        for sel in cookie_selectors:
             try:
-                cookie_btn = driver.find_elements(By.CSS_SELECTOR, selector)
-                if cookie_btn:
-                    cookie_btn[0].click()
-                    slow_pause(0.5, 1)
-                    log("Cookies aceptadas")
-                    return True
-            except:
-                continue
-                
-def accept_cookies_fallback(driver):
-    """
-    Versión mejorada con más opciones de búsqueda
-    """
-    try:
-        script = """
-        // Buscar en diferentes tipos de elementos
-        const selectors = ['button', 'a', 'div[role="button"]', 'span.cookie-button'];
-        let clicked = false;
-        
-        for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-            for (const el of elements) {
-                const text = el.textContent?.toLowerCase() || '';
-                const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
-                
-                if (/aceptar|accept|consent|agree|allow|permitir|ok|confirmar|confirm/i.test(text) ||
-                    /aceptar|accept|consent|agree|allow|permitir|ok|confirmar|confirm/i.test(ariaLabel)) {
-                    
-                    el.click();
-                    clicked = true;
-                    break;
-                }
-            }
-            if (clicked) break;
-        }
-        return clicked;
-        """
-        
-        result = driver.execute_script(script)
-        slow_pause(0.5, 1)
-        return bool(result)
-        
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                if els:
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", els[0])
+                    try:
+                        els[0].click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", els[0])
+                    time.sleep(0.3)
+                    clicked = True
+                    break
+            except Exception:
+                # seguimos probando otros selectores
+                pass
+
+        if clicked:
+            return True
+
+        # Intento 2: fallback JS genérico
+        return accept_cookies_fallback(driver)
+
     except Exception as e:
-        print(f"Error en fallback JavaScript: {e}")
+        log(f"Error manejando cookies: {e}")
         return False
+
+
+def accept_cookies_fallback(driver) -> bool:
+    """Fallback con JS: busca botones con texto típico y hace click."""
+    try:
+        driver.execute_script("""
+          (function(){
+            const labels = [
+              /aceptar.*(todas|todo|cookies)/i,
+              /accept.*(all|cookies)/i,
+              /consent/i,
+              /agree/i
+            ];
+            const btns = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+            for (const b of btns) {
+              const t = (b.textContent || b.value || "").trim();
+              if (!t) continue;
+              if (labels.some(rx => rx.test(t))) {
+                b.click();
+                return true;
+              }
+            }
+            // también probamos enlaces con aspecto de botón
+            const links = Array.from(document.querySelectorAll('a'));
+            for (const a of links) {
+              const t = (a.textContent || "").trim();
+              if (labels.some(rx => rx.test(t))) {
+                a.click();
+                return true;
+              }
+            }
+            return false;
+          })();
+        """)
+        time.sleep(0.4)
+        return True
+    except Exception as e:
+        log(f"Cookie JS fallback error: {e}")
+        return False
+
 
 def _full_scroll(driver):
     #Scroll completo para cargar todos los elementos
