@@ -69,8 +69,8 @@ except Exception as e:
     print(f"❌ Error cargando .env: {e}")
 
 # Credenciales
-FLOW_EMAILRq = os.getenv("FLOW_EMAILRq", "raquelcort1134@gmail.com")
-FLOW_PASSRq = os.getenv("FLOW_PASSRq", "Seattle$")
+FLOW_EMAIL = os.getenv("FLOW_EMAILRq", "raquelcort1134@gmail.com")
+FLOW_PASS = os.getenv("FLOW_PASSRq", "Seattle$")
 
 # Flags/tunables
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
