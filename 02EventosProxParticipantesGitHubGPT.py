@@ -182,38 +182,76 @@ def _save_output_atomic(data_list, out_path, latest_path=None):
 
 # ============================== FUNCIONES DE NAVEGACIÓN ==============================
 
+#  Aqui instalacion de Chomdriver para GitHub # 😊✨😊✨😊✨😊. Esto hay que quitarlo en Spyder y poner el siguiente
 def _get_driver(headless=True):
-    """Crea y configura el driver de Selenium"""
+    #Crea y configura el driver de Selenium
     if not HAS_SELENIUM:
         raise ImportError("Selenium no está instalado")
     
     opts = Options()
+    
+    # Configuración específica para GitHub Actions/entornos headless
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-infobars")
+    opts.add_argument("--disable-browser-side-navigation")
+    opts.add_argument("--disable-features=VizDisplayCompositor")
+    opts.add_argument("--disable-setuid-sandbox")
+    opts.add_argument("--ignore-certificate-errors")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
     if headless:
         opts.add_argument("--headless=new")
     if INCOGNITO:
         opts.add_argument("--incognito")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # Configuración adicional para evitar detección
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option('useAutomationExtension', False)
     
     try:
-        if HAS_WEBDRIVER_MANAGER:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=opts)
-        else:
-            driver = webdriver.Chrome(options=opts)
+        # USAR CHROME Y CHROMEDRIVER INSTALADOS CORRECTAMENTE
+        # Ruta correcta de Chrome en Ubuntu
+        opts.binary_location = "/usr/bin/google-chrome-stable"
         
-        driver.set_page_load_timeout(60)
+        # Buscar chromedriver en varias ubicaciones posibles
+        chromedriver_paths = [
+            "/usr/local/bin/chromedriver",
+            "/usr/bin/chromedriver",
+            "/snap/bin/chromedriver"
+        ]
+        
+        chromedriver_path = None
+        for path in chromedriver_paths:
+            if os.path.exists(path):
+                chromedriver_path = path
+                break
+        
+        if not chromedriver_path:
+            raise Exception("No se encontró chromedriver en las rutas esperadas")
+        
+        service = Service(executable_path=chromedriver_path)
+        driver = webdriver.Chrome(service=service, options=opts)
+        
+        # Ejecutar script para evitar detección
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        driver.set_page_load_timeout(90)
+        driver.implicitly_wait(30)
         return driver
         
     except Exception as e:
         log(f"Error creando driver: {e}")
+        log("Traceback completo:")
+        import traceback
+        traceback.print_exc()
         return None
 
 def _login(driver):
-    """Inicia sesión en FlowAgility"""
+    #Inicia sesión en FlowAgility
     if not driver:
         return False
         
@@ -221,42 +259,129 @@ def _login(driver):
     
     try:
         driver.get(f"{BASE}/user/login")
-        WebDriverWait(driver, 30).until(
+        
+        # Esperar más tiempo en GitHub Actions
+        WebDriverWait(driver, 60).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        slow_pause(2, 3)
+        slow_pause(3, 5)
         
-        email_field = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.NAME, "user[email]"))
-        )
-        password_field = driver.find_element(By.NAME, "user[password]")
-        submit_button = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
+        # Verificar si ya estamos logueados (redirección)
+        if "/user/login" not in driver.current_url:
+            log("Ya autenticado (redirección detectada)")
+            return True
         
+        # Buscar campos de login con múltiples selectores
+        email_selectors = [
+            (By.NAME, "user[email]"),
+            (By.ID, "user_email"),
+            (By.CSS_SELECTOR, "input[type='email']"),
+            (By.XPATH, "//input[contains(@name, 'email')]")
+        ]
+        
+        password_selectors = [
+            (By.NAME, "user[password]"),
+            (By.ID, "user_password"),
+            (By.CSS_SELECTOR, "input[type='password']")
+        ]
+        
+        submit_selectors = [
+            (By.CSS_SELECTOR, 'button[type="submit"]'),
+            (By.XPATH, "//button[contains(text(), 'Sign') or contains(text(), 'Log') or contains(text(), 'Iniciar')]")
+        ]
+        
+        email_field = None
+        for selector in email_selectors:
+            try:
+                email_field = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable(selector)
+                )
+                break
+            except:
+                continue
+        
+        if not email_field:
+            log("❌ No se pudo encontrar campo email")
+            return False
+        
+        password_field = None
+        for selector in password_selectors:
+            try:
+                password_field = driver.find_element(*selector)
+                break
+            except:
+                continue
+        
+        if not password_field:
+            log("❌ No se pudo encontrar campo password")
+            return False
+        
+        submit_button = None
+        for selector in submit_selectors:
+            try:
+                submit_button = driver.find_element(*selector)
+                break
+            except:
+                continue
+        
+        if not submit_button:
+            log("❌ No se pudo encontrar botón submit")
+            return False
+        
+        # Llenar campos
         email_field.clear()
-        email_field.send_keys(FLOW_EMAILRq)
+        email_field.send_keys(FLOW_EMAIL)
         slow_pause(1, 2)
         
         password_field.clear()
-        password_field.send_keys(FLOW_PASSRq)
+        password_field.send_keys(FLOW_PASS)
         slow_pause(1, 2)
         
+        # Hacer clic
         submit_button.click()
         
-        WebDriverWait(driver, 30).until(
-            lambda d: "/user/login" not in d.current_url
-        )
-        
-        slow_pause(3, 5)
-        log("Login exitoso")
-        return True
+        # Esperar a que se complete el login con timeout extendido
+        try:
+            WebDriverWait(driver, 45).until(
+                lambda d: "/user/login" not in d.current_url or "dashboard" in d.current_url or "zone" in d.current_url
+            )
+            
+            # Verificar login exitoso
+            slow_pause(5, 8)  # Pausa más larga para GitHub Actions
+            
+            current_url = driver.current_url
+            if "/user/login" in current_url:
+                log("❌ Login falló - aún en página de login")
+                # Verificar mensajes de error
+                try:
+                    error_elements = driver.find_elements(By.CSS_SELECTOR, ".error, .alert, .text-red-600")
+                    for error in error_elements:
+                        log(f"Mensaje error: {error.text}")
+                except:
+                    pass
+                return False
+            else:
+                log(f"✅ Login exitoso - Redirigido a: {current_url}")
+                return True
+                
+        except TimeoutException:
+            log("❌ Timeout esperando redirección de login")
+            # Tomar screenshot para debugging
+            try:
+                driver.save_screenshot("/tmp/login_timeout.png")
+                log("📸 Screenshot guardado en /tmp/login_timeout.png")
+            except:
+                pass
+            return False
         
     except Exception as e:
-        log(f"Error en login: {e}")
+        log(f"❌ Error en login: {e}")
+        log(f"Traceback: {traceback.format_exc()}")
         return False
 
 def _accept_cookies(driver):
-    """Aceptar cookies si es necesario"""
+    #Aceptar cookies si es necesario
     try:
         cookie_selectors = [
             'button[aria-label="Accept all"]',
@@ -276,7 +401,8 @@ def _accept_cookies(driver):
             except:
                 continue
                 
-        driver.execute_script("""
+        # Fallback con JavaScript
+        driver.execute_script(#
             const buttons = document.querySelectorAll('button');
             for (const btn of buttons) {
                 if (/aceptar|accept|consent|agree/i.test(btn.textContent)) {
@@ -284,7 +410,7 @@ def _accept_cookies(driver):
                     break;
                 }
             }
-        """)
+        )
         slow_pause(0.5, 1)
         return True
         
@@ -293,7 +419,7 @@ def _accept_cookies(driver):
         return False
 
 def _full_scroll(driver):
-    """Scroll completo para cargar todos los elementos"""
+    #Scroll completo para cargar todos los elementos
     last_height = driver.execute_script("return document.body.scrollHeight")
     for _ in range(MAX_SCROLLS):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -302,6 +428,8 @@ def _full_scroll(driver):
         if new_height == last_height:
             break
         last_height = new_height
+#  Hasta Aqui instalacion de Chomdriver para GitHub # 😊✨😊✨😊✨😊. Esto hay que quitarlo en Spyder y poner el siguiente
+
 
 # ============================== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==============================
 
