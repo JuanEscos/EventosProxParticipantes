@@ -93,7 +93,11 @@ jobs:
           mkdir -p "${OUT_DIR}"
           echo "OUT_DIR contents (before):"
           ls -la "${OUT_DIR}" || true
-
+          
+      - name: Syntax check
+        run: |
+          python -m py_compile ./02EventosProxParticipantesGitHubGPT.py
+    
       - name: Run Python scraper (events + participants)
         timeout-minutes: 60
         env:
