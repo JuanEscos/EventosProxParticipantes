@@ -1087,9 +1087,16 @@ def main():
     #_clean_output_directory()
     
     parser = argparse.ArgumentParser(description="Extractor de participantes de FlowAgility")
-    # --- dentro de main(), tras parser = argparse.ArgumentParser(...) ---
-    parser.add_argument("--limit-events", type=int, default=None,
-                        help="Límite de eventos a procesar en ambos módulos (por defecto usa LIMIT_EVENTS del entorno)")
+    
+    parser.add_argument("--module",
+        choices=["events","participants","all"],
+        default="all",
+        help="Qué módulo ejecutar")
+    
+    parser.add_argument("--limit-events",
+        type=int,
+        default=None,
+        help="Límite de eventos a procesar en ambos módulos (si no se indica, usa LIMIT_EVENTS del entorno)")
     
     args = parser.parse_args()
     
