@@ -479,7 +479,7 @@ def _full_scroll(driver):
 
 # ============================== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==============================
 
-def extract_events():
+def extract_events(limit: int | None = None):
     """Función principal para extraer eventos básicos"""
     if not HAS_SELENIUM:
         log("Error: Selenium no está instalado")
@@ -583,9 +583,10 @@ def extract_events():
                 
                 events.append(event_data)
                 log(f"✅ Evento {i} procesado: {event_data.get('nombre', 'Sin nombre')}")
-                # 👉 corta en caliente si hay límite
+                # 👉 corta si hay límite
                 if isinstance(limit, int) and limit > 0 and len(events) >= limit:
                     log(f"⏹️  Alcanzado límite de {limit} eventos en Módulo 1")
+                    events = events[:limit] 
                     break
                 # por si quieres cortar de nuevo por seguridad (no imprescindible)
                 if isinstance(limit, int) and limit > 0:
