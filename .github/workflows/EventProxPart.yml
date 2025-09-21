@@ -84,7 +84,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else:
+          else
             pip install selenium webdriver-manager beautifulsoup4 python-dotenv
           fi
 
@@ -120,7 +120,6 @@ jobs:
           FLOW_PASSRq: "${{ env.FLOW_PASSRq }}"
         run: |
           echo "=== EJECUTANDO SCRAPER ==="
-          # 👉 fuerza límite de eventos también por CLI
           python ./02EventosProxParticipantesGitHubGPT.py --module all --limit-events "${LIMIT_EVENTS}"
           echo "=== SCRAPER COMPLETADO ==="
 
@@ -130,45 +129,39 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const core = require('@actions/core');
             const p = './output/participantes_detallados.json';
 
             if (!fs.existsSync(p)) {
               core.info('No existe ./output/participantes_detallados.json');
-              return;
-            }
+            } else {
+              let data;
+              try {
+                data = JSON.parse(fs.readFileSync(p, 'utf8'));
+              } catch (e) {
+                core.info(`No se pudo leer ${p}: ${e}`);
+                return;
+              }
 
-            let data;
-            try {
-              data = JSON.parse(fs.readFileSync(p, 'utf8'));
-            } catch (e) {
-              core.info(`No se pudo leer ${p}: ${e}`);
-              return;
-            }
-
-            let rows = 0;
-            const counts = {};
-            for (const ev of (data || [])) {
-              for (const r of (ev.participantes || [])) {
-                rows++;
-                for (const [k, v] of Object.entries(r)) {
-                  if (!counts[k]) counts[k] = { empty: 0, total: 0 };
-                  counts[k].total++;
-                  if (!String(v ?? '').trim()) counts[k].empty++;
+              let rows = 0;
+              const counts = {};
+              for (const ev of (data || [])) {
+                for (const r of (ev.participantes || [])) {
+                  rows++;
+                  for (const [k, v] of Object.entries(r)) {
+                    if (!counts[k]) counts[k] = { empty: 0, total: 0 };
+                    counts[k].total++;
+                    if (!String(v ?? '').trim()) counts[k].empty++;
+                  }
                 }
               }
-            }
 
-            core.info(`Participantes totales: ${rows}`);
-            const keys = Object.keys(counts).sort();
-            for (const k of keys) {
-              const t = counts[k].total;
-              const e = counts[k].empty;
-              const pct = t ? (e * 100.0 / t).toFixed(1) : '0.0';
-              const left = k.padEnd(22, ' ');
-              const rt = String(e).padStart(4);
-              const tt = String(t).padStart(4);
-              core.info(`${left} vacíos: ${rt}/${tt}  (${pct}%)`);
+              core.info(`Participantes totales: ${rows}`);
+              for (const k of Object.keys(counts).sort()) {
+                const t = counts[k].total;
+                const e = counts[k].empty;
+                const pct = t ? (e * 100 / t).toFixed(1) : '0.0';
+                core.info(`${k.padEnd(22)} vacíos: ${String(e).padStart(4)}/${String(t).padStart(4)}  (${pct}%)`);
+              }
             }
 
       - name: Verify generated files
@@ -206,88 +199,6 @@ jobs:
           else
             echo "❌ Faltan archivos requeridos (01events.json) o ninguno de (02info.json|participantes_detallados.json)"
             exit 1
-          fi
-
-      - name: Compress JSON files for FTP
-        run: |
-          echo "=== COMPRIMIENDO ARCHIVOS PARA FTP ==="
-          to_compress=( "01events.json" "02info.json" "participantes_detallados.json" )
-          for f in "${to_compress[@]}"; do
-            if [ -f "./output/$f" ]; then
-              echo "Comprimiendo: $f"
-              gzip -9 -c "./output/$f" > "./output/${f}.gz"
-              orig=$(stat -c%s "./output/$f")
-              comp=$(stat -c%s "./output/${f}.gz")
-              ratio=$(( comp * 100 / orig ))
-              echo "  $orig bytes → $comp bytes (${ratio}%)"
-            fi
-          done
-          echo "=== ARCHIVOS COMPRIMIDOS ==="
-          ls -la ./output/*.gz || true
-
-      - name: Upload compressed files to FTP
-        env:
-          FTP_SERVER: ${{ secrets.FTP_SERVER }}
-          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
-        run: |
-          echo '=== SUBIENDO ARCHIVOS COMPRIMIDOS ==='
-
-          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
-            echo "❌ ERROR: Variables FTP no configuradas correctamente"
-            exit 1
-          fi
-
-          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
-          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
-          echo "Subiendo a: ${BASE_URL}/"
-
-          COMPRESSED_FILES=()
-          for f in "01events.json.gz" "02info.json.gz" "participantes_detallados.json.gz"; do
-            [ -f "./output/$f" ] && COMPRESSED_FILES+=("$f")
-          done
-
-          if [ ${#COMPRESSED_FILES[@]} -eq 0 ]; then
-            echo "❌ No hay archivos comprimidos para subir"
-            exit 1
-          fi
-
-          for file in "${COMPRESSED_FILES[@]}"; do
-            local_file="./output/$file"
-            echo "📤 Subiendo: $file"
-            curl --fail \
-                 --ssl-reqd \
-                 --ftp-create-dirs \
-                 --disable-epsv \
-                 --ftp-skip-pasv-ip \
-                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
-                 --upload-file "$local_file" \
-                 "${BASE_URL}/$file" \
-            && echo "✅ $file subido" || {
-              echo "❌ Error subiendo $file"
-              orig="${file%.gz}"
-              if [ -f "./output/$orig" ]; then
-                echo "🔄 Intentando subir original: $orig"
-                curl --fail \
-                     --ssl-reqd \
-                     --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
-                     --upload-file "./output/$orig" \
-                     "${BASE_URL}/$orig" \
-                && echo "✅ $orig subido" || echo "❌ Error subiendo $orig también"
-              fi
-            }
-            sleep 1
-          done
-
-          if [ -f "./output/01events.json" ]; then
-            echo "📤 Subiendo 01events.json (sin comprimir)"
-            curl --fail \
-                 --ssl-reqd \
-                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
-                 --upload-file "./output/01events.json" \
-                 "${BASE_URL}/01events.json" \
-            && echo "✅ 01events.json subido" || echo "⚠️  No se pudo subir 01events.json"
           fi
 
       - name: Create backup directory
