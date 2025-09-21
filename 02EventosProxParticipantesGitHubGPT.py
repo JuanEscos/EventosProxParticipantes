@@ -583,7 +583,14 @@ def extract_events():
                 
                 events.append(event_data)
                 log(f"✅ Evento {i} procesado: {event_data.get('nombre', 'Sin nombre')}")
-                
+                # 👉 corta en caliente si hay límite
+                if isinstance(limit, int) and limit > 0 and len(events) >= limit:
+                    log(f"⏹️  Alcanzado límite de {limit} eventos en Módulo 1")
+                    break
+                # por si quieres cortar de nuevo por seguridad (no imprescindible)
+                if isinstance(limit, int) and limit > 0:
+                    events = events[:limit]  
+              
             except Exception as e:
                 log(f"❌ Error procesando evento {i}: {str(e)}")
                 continue
@@ -1080,10 +1087,18 @@ def main():
     #_clean_output_directory()
     
     parser = argparse.ArgumentParser(description="Extractor de participantes de FlowAgility")
-    parser.add_argument("--module", choices=["events", "participants", "all"], default="all", 
-                       help="Módulo a ejecutar: events (solo eventos), participants (solo participantes), all (ambos)")
+    # --- dentro de main(), tras parser = argparse.ArgumentParser(...) ---
+    parser.add_argument("--limit-events", type=int, default=None,
+                        help="Límite de eventos a procesar en ambos módulos (por defecto usa LIMIT_EVENTS del entorno)")
     
     args = parser.parse_args()
+    
+    # justo después de parse_args:
+    global LIMIT_EVENTS
+    if args.limit_events is not None:
+        LIMIT_EVENTS = int(args.limit_events)
+    log(f"🔧 LIMIT_EVENTS efectivo: {LIMIT_EVENTS or 0} (0 = sin límite)")
+
     
     try:
         success = True
@@ -1093,7 +1108,7 @@ def main():
         # Módulo 1: Eventos básicos
         if args.module in ["events", "all"]:
             log("🏁 INICIANDO EXTRACCIÓN DE EVENTOS BÁSICOS")
-            events_data = extract_events()
+            events_data = extract_events(limit=LIMIT_EVENTS)
             if not events_data:
                 log("❌ Falló la extracción de eventos")
                 success = False
