@@ -126,22 +126,24 @@ jobs:
 
       - name: Quick quality report (JSON completeness)
         if: always()
+        shell: bash
         run: |
           echo "=== CALIDAD DE CAMPOS (participantes_detallados.json) ==="
           if [ -f "./output/participantes_detallados.json" ]; then
             python - <<'PY'
-import json
+import json, sys
 
 pth = "./output/participantes_detallados.json"
 try:
-    data = json.load(open(pth, 'r', encoding='utf-8'))
+    with open(pth, "r", encoding="utf-8") as f:
+        data = json.load(f)
 except Exception as e:
     print(f"No se pudo leer {pth}: {e}")
-    raise SystemExit(0)
+    sys.exit(0)
 
 rows = 0
 counts = {}
-for ev in data or []:
+for ev in (data or []):
     for p in ev.get("participantes", []):
         rows += 1
         for k, v in p.items():
@@ -159,6 +161,7 @@ PY
           else
             echo "No existe ./output/participantes_detallados.json"
           fi
+
 
       - name: Verify generated files
         run: |
