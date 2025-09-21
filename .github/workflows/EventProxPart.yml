@@ -201,6 +201,98 @@ jobs:
             exit 1
           fi
 
+      - name: Sanity check output before compression
+        if: always()
+        run: |
+          echo "=== LISTADO ./output ANTES DE COMPRIMIR ==="
+          ls -la ./output || true
+
+      - name: Compress all JSON files in output
+        if: always()
+        run: |
+          echo "=== COMPRIMIENDO TODOS LOS JSON EN ./output ==="
+          shopt -s nullglob
+          count=0
+          for f in ./output/*.json; do
+            base="$(basename "$f")"
+            echo "Comprimiendo: $base"
+            gzip -9 -c "$f" > "$f.gz" || { echo "❌ Error comprimiendo $base"; exit 1; }
+            orig=$(stat -c%s "$f")
+            comp=$(stat -c%s "$f.gz")
+            printf "  %s bytes → %s bytes (%.1f%%)\n" "$orig" "$comp" "$(echo "100*$comp/$orig" | bc -l)"
+            count=$((count+1))
+          done
+          echo "=== LISTADO ./output DESPUÉS DE COMPRIMIR ==="
+          ls -la ./output || true
+          if [ $count -eq 0 ]; then
+            echo "⚠️  No había ningún JSON para comprimir en ./output"
+          fi
+
+      - name: Upload compressed files to FTP
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          echo '=== SUBIENDO ARCHIVOS COMPRIMIDOS ==='
+
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "❌ ERROR: Variables FTP no configuradas correctamente"
+            exit 1
+          fi
+
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Subiendo a: ${BASE_URL}/"
+
+          COMPRESSED_FILES=()
+          for f in "01events.json.gz" "02info.json.gz" "participantes_detallados.json.gz"; do
+            [ -f "./output/$f" ] && COMPRESSED_FILES+=("$f")
+          done
+
+          if [ ${#COMPRESSED_FILES[@]} -eq 0 ]; then
+            echo "❌ No hay archivos comprimidos específicos (01events/02info/participantes_detallados) para subir"
+            exit 0
+          fi
+
+          for file in "${COMPRESSED_FILES[@]}"; do
+            local_file="./output/$file"
+            echo "📤 Subiendo: $file"
+            curl --fail \
+                 --ssl-reqd \
+                 --ftp-create-dirs \
+                 --disable-epsv \
+                 --ftp-skip-pasv-ip \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "$local_file" \
+                 "${BASE_URL}/$file" \
+            && echo "✅ $file subido" || {
+              echo "❌ Error subiendo $file"
+              orig="${file%.gz}"
+              if [ -f "./output/$orig" ]; then
+                echo "🔄 Intentando subir original: $orig"
+                curl --fail \
+                     --ssl-reqd \
+                     --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                     --upload-file "./output/$orig" \
+                     "${BASE_URL}/$orig" \
+                && echo "✅ $orig subido" || echo "❌ Error subiendo $orig también"
+              fi
+            }
+            sleep 1
+          done
+
+          if [ -f "./output/01events.json" ]; then
+            echo "📤 Subiendo 01events.json (sin comprimir)"
+            curl --fail \
+                 --ssl-reqd \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "./output/01events.json" \
+                 "${BASE_URL}/01events.json" \
+            && echo "✅ 01events.json subido" || echo "⚠️  No se pudo subir 01events.json"
+          fi
+
       - name: Create backup directory
         run: mkdir -p ./backup
 
