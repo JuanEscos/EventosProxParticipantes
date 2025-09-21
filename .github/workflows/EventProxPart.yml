@@ -124,28 +124,36 @@ jobs:
           python ./02EventosProxParticipantesGitHubGPT.py --module all --limit-events "${LIMIT_EVENTS}"
           echo "=== SCRAPER COMPLETADO ==="
 
-      - name: Quick quality report (JSON completeness)
+           - name: Quick quality report (JSON completeness)
         if: always()
         run: |
           echo "=== CALIDAD DE CAMPOS (participantes_detallados.json) ==="
           if [ -f "./output/participantes_detallados.json" ]; then
-            python - << 'PY'
-import json, os
-pth="./output/participantes_detallados.json"
-data=json.load(open(pth,'r',encoding='utf-8'))
-rows=0
-counts={}
-for ev in data:
-    for p in ev.get("participantes",[]):
-        rows+=1
-        for k,v in p.items():
-            if k not in counts: counts[k]={"empty":0,"total":0}
-            counts[k]["total"]+=1
-            if (v is None) or (str(v).strip()==""):
-                counts[k]["empty"]+=1
+            python - <<'PY'
+import json
+
+pth = "./output/participantes_detallados.json"
+try:
+    data = json.load(open(pth, 'r', encoding='utf-8'))
+except Exception as e:
+    print(f"No se pudo leer {pth}: {e}")
+    raise SystemExit(0)
+
+rows = 0
+counts = {}
+for ev in data or []:
+    for p in ev.get("participantes", []):
+        rows += 1
+        for k, v in p.items():
+            d = counts.setdefault(k, {"empty": 0, "total": 0})
+            d["total"] += 1
+            if v is None or str(v).strip() == "":
+                d["empty"] += 1
+
 print(f"Participantes totales: {rows}")
 for k in sorted(counts):
-    t=counts[k]["total"]; e=counts[k]["empty"]; pct = (e*100.0/t) if t else 0
+    t = counts[k]["total"]; e = counts[k]["empty"]
+    pct = (e * 100.0 / t) if t else 0.0
     print(f"{k:22s} vacíos: {e:4d}/{t:4d}  ({pct:5.1f}%)")
 PY
           else
