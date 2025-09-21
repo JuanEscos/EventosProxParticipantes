@@ -84,7 +84,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
-          else
+          else:
             pip install selenium webdriver-manager beautifulsoup4 python-dotenv
           fi
 
@@ -124,7 +124,7 @@ jobs:
           python ./02EventosProxParticipantesGitHubGPT.py --module all --limit-events "${LIMIT_EVENTS}"
           echo "=== SCRAPER COMPLETADO ==="
 
-           - name: Quick quality report (JSON completeness)
+      - name: Quick quality report (JSON completeness)
         if: always()
         run: |
           echo "=== CALIDAD DE CAMPOS (participantes_detallados.json) ==="
@@ -309,7 +309,6 @@ PY
           if-no-files-found: warn
           retention-days: 3
 
-      # 👉 NUEVO: sube los HTML de depuración si existen
       - name: Upload participant debug HTML (if any)
         if: always()
         uses: actions/upload-artifact@v4
