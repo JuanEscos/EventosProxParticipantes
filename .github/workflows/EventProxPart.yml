@@ -130,39 +130,33 @@ jobs:
         run: |
           echo "=== CALIDAD DE CAMPOS (participantes_detallados.json) ==="
           if [ -f "./output/participantes_detallados.json" ]; then
-            python - <<'PY'
-import json, sys
-
-pth = "./output/participantes_detallados.json"
+            CODE='import json,sys,os
+p="./output/participantes_detallados.json"
 try:
-    with open(pth, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    with open(p,"r",encoding="utf-8") as f:
+        data=json.load(f)
 except Exception as e:
-    print(f"No se pudo leer {pth}: {e}")
+    print(f"No se pudo leer {p}: {e}")
     sys.exit(0)
-
-rows = 0
-counts = {}
+rows=0
+counts={}
 for ev in (data or []):
-    for p in ev.get("participantes", []):
-        rows += 1
-        for k, v in p.items():
-            d = counts.setdefault(k, {"empty": 0, "total": 0})
-            d["total"] += 1
-            if v is None or str(v).strip() == "":
-                d["empty"] += 1
-
+    for r in ev.get("participantes", []):
+        rows+=1
+        for k,v in r.items():
+            d=counts.setdefault(k,{"empty":0,"total":0})
+            d["total"]+=1
+            if v is None or str(v).strip()=="":
+                d["empty"]+=1
 print(f"Participantes totales: {rows}")
 for k in sorted(counts):
-    t = counts[k]["total"]; e = counts[k]["empty"]
-    pct = (e * 100.0 / t) if t else 0.0
-    print(f"{k:22s} vacíos: {e:4d}/{t:4d}  ({pct:5.1f}%)")
-PY
+    t=counts[k]["total"]; e=counts[k]["empty"]
+    pct=(e*100.0/t) if t else 0.0
+    print(f"{k:22s} vacíos: {e:4d}/{t:4d}  ({pct:5.1f}%)")'
+            python -c "$CODE"
           else
             echo "No existe ./output/participantes_detallados.json"
           fi
-
-
 
 
       - name: Verify generated files
