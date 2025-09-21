@@ -1,0 +1,374 @@
+*** a/03_eventosproxParticipantes.py
+--- b/03_eventosproxParticipantes.py
+***************
+*** 1,20 ****
+--- 1,22 ----
++ # Parche GPT: mapeo robusto y debug HTML
+  # -*- coding: utf-8 -*-
+  import os, re, json, time, random, unicodedata, traceback
+  from datetime import datetime
+  from pathlib import Path
+  from glob import glob
+  # ... (imports existentes)
+  
+***************
+*** 200,280 ****
+- JS_MAP_PARTICIPANT_RICH = r"""
+- const pid = arguments[0];
+- const root = document.getElementById(pid);
+- if (!root) return null;
+- 
+- const txt = el => (el && el.textContent) ? el.textContent.trim() : "";
+- 
+- function classListArray(el){
+-   if (!el) return [];
+-   const cn = el.className;
+-   if (!cn) return [];
+-   if (typeof cn === 'string') return cn.trim().split(/\s+/);
+-   if (typeof cn === 'object' && 'baseVal' in cn) return String(cn.baseVal).trim().split(/\s+/);
+-   return String(cn).trim().split(/\s+/);
+- }
+- function isHeader(el){
+-   const arr = classListArray(el);
+-   return (arr.includes('border-b') && arr.includes('border-gray-400'))
+-       || (arr.includes('font-bold') && arr.includes('text-sm') && arr.some(c => /^mt-/.test(c)));
+- }
+- function isLabel(el){ return (classListArray(el).includes('text-gray-500') && classListArray(el).includes('text-sm')); }
+- function isStrong(el){
+-   const arr = classListArray(el);
+-   return (arr.includes('font-bold') && arr.includes('text-sm'));
+- }
+- function nextStrong(el){
+-   let cur = el;
+-   for (let i=0;i<8;i++){
+-     cur = cur && cur.nextElementSibling;
+-     if (!cur) break;
+-     if (isStrong(cur)) return cur;
+-   }
+-   return null;
+- }
+- 
+- const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+- let node = walker.currentNode;
+- let currentDay = null;
+- let tmpFecha = null;
+- let tmpMangas = null;
+- 
+- const fields = {};
+- const schedule = [];
+- 
+- const simpleFieldLabels = new Set([
+-   "Dorsal","Guía","Guia","Perro","Raza","Edad","Género","Genero",
+-   "Altura (cm)","Altura","Nombre de Pedigree","Nombre de Pedrigree",
+-   "País","Pais","Licencia","Equipo","Club","Federación","Federacion"
+- ]);
+- 
+- while (node){
+-   if (isHeader(node)){
+-     const t = txt(node); if (t) currentDay = t;
+-   } else if (isLabel(node)){
+-     const label = (txt(node) || "");
+-     const valueEl = nextStrong(node);
+-     const value = txt(valueEl) || "";
+- 
+-     const l = label.toLowerCase();
+-     if (l.startsWith("fecha"))       { tmpFecha  = value; }
+-     else if (l.startsWith("mangas")) { tmpMangas = value; }
+-     else if (simpleFieldLabels.has(label) && value && (fields[label] == null || fields[label] === "")) {
+-       fields[label] = value;
+-     }
+- 
+-     if (tmpFecha !== null && tmpMangas !== null){
+-       schedule.push({ day: currentDay || "", fecha: tmpFecha, mangas: tmpMangas });
+-       tmpFecha = null; tmpMangas = null;
+-     }
+-   }
+-   node = walker.nextNode();
+- }
+- return { fields, schedule };
+- """
++ JS_MAP_PARTICIPANT_RICH = r"""
++ const pid = arguments[0];
++ const root = document.getElementById(pid);
++ if (!root) return null;
++ 
++ const norm = s => (s||"").normalize("NFKC").replace(/\s+/g," ").trim();
++ const stripColon = s => norm(s).replace(/[:：]\s*$/,"");
++ 
++ function cls(el){
++   if(!el) return [];
++   const c = el.className;
++   if(!c) return [];
++   if (typeof c === 'string') return c.trim().split(/\s+/);
++   if (typeof c === 'object' && 'baseVal' in c) return String(c.baseVal).trim().split(/\s+/);
++   return String(c).trim().split(/\s+/);
++ }
++ const isHeader = el => {
++   const a = cls(el);
++   return (a.includes('border-b') && a.includes('border-gray-400')) ||
++          (a.includes('font-bold') && a.includes('text-sm') && a.some(c=>/^mt-/.test(c)));
++ };
++ const isLabelHint = el => {
++   const a = cls(el);
++   const t = (el.textContent||"").trim();
++   return a.includes('text-gray-500') || /[:：]\s*$/.test(t) || /label/i.test(a.join(" "));
++ };
++ const isValueHint = el => {
++   const a = cls(el);
++   return a.includes('text-black') || a.includes('font-bold') || /value/i.test(a.join(" "));
++ };
++ 
++ const FIELDS = new Map();
++ const CANON = new Map([
++   [/^dorsal$/i, "Dorsal"],
++   [/^(gu[ií]a|guide)$/i, "Guía"],
++   [/^(perro|dog)$/i, "Perro"],
++   [/^(raza|breed)$/i, "Raza"],
++   [/^(edad|age)$/i, "Edad"],
++   [/^(g[eé]nero|gender|sexo)$/i, "Género"],
++   [/^altura(\s*\(cm\))?$/i, "Altura (cm)"],
++   [/^height(\s*\(cm\))?$/i, "Altura (cm)"],
++   [/^nombre\s+de\s+pedig(re|ree)|^pedigree\s*name$/i, "Nombre de Pedigree"],
++   [/^(pa[ií]s|country)$/i, "País"],
++   [/^(licencia|license)$/i, "Licencia"],
++   [/^club$/i, "Club"],
++   [/^federaci[oó]n|^federation$/i, "Federación"],
++   [/^equipo|^team$/i, "Equipo"],
++ ]);
++ function canon(label){
++   const L = stripColon(label);
++   for (const [rx, key] of CANON.entries()){ if (rx.test(L)) return key; }
++   return null;
++ }
++ 
++ // (1) Grids 2 columnas (label -> valor)
++ const grids = root.querySelectorAll("div.grid");
++ grids.forEach(g=>{
++   const kids = Array.from(g.children||[]);
++   for (let i=0; i+1<kids.length; i++){
++     const a = kids[i], b = kids[i+1];
++     const ta = norm(a.textContent), tb = norm(b.textContent);
++     if (!ta || !tb) continue;
++     const looks = isLabelHint(a) || /[:：]\s*$/.test(ta);
++     const key = looks ? canon(ta) : null;
++     if (key && !FIELDS.has(key) && tb){ FIELDS.set(key, tb); }
++   }
++ });
++ 
++ // (2) Label cercano + strong/valor
++ const labels = root.querySelectorAll("div.text-gray-500.text-sm, .label, [data-role='label']");
++ labels.forEach(lab=>{
++   const L = canon(lab.textContent||""); if(!L || FIELDS.has(L)) return;
++   let cur = lab;
++   for (let k=0;k<6;k++){
++     cur = cur && cur.nextElementSibling; if(!cur) break;
++     const txt = norm(cur.textContent||""); if(!txt) continue;
++     if (isValueHint(cur) || !isLabelHint(cur)){ FIELDS.set(L, txt); break; }
++   }
++ });
++ 
++ // (3) dl/dt/dd
++ root.querySelectorAll("dl").forEach(dl=>{
++   const dts = dl.querySelectorAll("dt");
++   const dds = dl.querySelectorAll("dd");
++   for (let i=0;i<Math.min(dts.length, dds.length); i++){
++     const L = canon(dts[i].textContent||"");
++     const V = norm(dds[i].textContent||"");
++     if (L && V && !FIELDS.has(L)) FIELDS.set(L, V);
++   }
++ });
++ 
++ // (4) "label: valor" en texto plano
++ root.querySelectorAll("div, p, li").forEach(el=>{
++   const txt = norm(el.textContent||"");
++   if (!txt || txt.length<3) return;
++   const m = txt.match(/^([^:：]{2,40})[:：]\s*(.+)$/);
++   if (m){
++     const L = canon(m[1]); const V = m[2].trim();
++     if (L && V && !FIELDS.has(L)) FIELDS.set(L, V);
++   }
++ });
++ 
++ // (5) Calendario Día/Fecha/Mangas
++ const schedule = [];
++ let currentDay = "";
++ const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
++ let node = walker.currentNode;
++ let tmpFecha = null, tmpMangas = null;
++ while (node){
++   if (isHeader(node)){
++     currentDay = norm(node.textContent||"");
++   } else {
++     const t = norm(node.textContent||"");
++     if (/^fecha\b/i.test(t)) {
++       let cur = node; let v="";
++       for (let k=0;k<6;k++){ cur = cur && cur.nextElementSibling; if(!cur) break;
++         const ctxt = norm(cur.textContent||""); if (ctxt){ v = ctxt; break; } }
++       if (v) tmpFecha = v;
++     } else if (/^mangas?\b/i.test(t)) {
++       let cur = node; let v="";
++       for (let k=0;k<6;k++){ cur = cur && cur.nextElementSibling; if(!cur) break;
++         const ctxt = norm(cur.textContent||""); if (ctxt){ v = ctxt; break; } }
++       if (v) tmpMangas = v;
++     }
++     if (tmpFecha !== null && tmpMangas !== null){
++       schedule.push({ day: currentDay||"", fecha: tmpFecha, mangas: tmpMangas });
++       tmpFecha = null; tmpMangas = null;
++     }
++   }
++   node = walker.nextNode();
++ }
++ const outFields = Object.fromEntries(FIELDS.entries());
++ return { fields: outFields, schedule };
++ """
+***************
+*** 300,360 ****
+- def _fallback_map_participant(driver, pid, By):
+-     labels = driver.find_elements(
+-         By.XPATH, f"//div[@id='{pid}']//div[contains(@class,'text-gray-500') and contains(@class,'text-sm')]"
+-     )
+-     values = driver.find_elements(
+-         By.XPATH, f"//div[@id='{pid}']//div[contains(@class,'font-bold') and contains(@class,'text-sm')]"
+-     )
+-     fields = {}
+-     for lab_el, val_el in zip(labels, values):
+-         lt = _clean(lab_el.text or "")
+-         vt = _clean(val_el.text or "")
+-         if lt and vt and lt not in fields:
+-             fields[lt] = vt
+- 
+-     headers = driver.find_elements(
+-         By.XPATH, f"//div[@id='{pid}']//div[contains(@class,'border-b') and contains(@class,'border-gray-400')]"
+-     )
+-     schedule = []
+-     for h in headers:
+-         fecha = h.find_elements(
+-             By.XPATH, "following-sibling::div[contains(@class,'font-bold') and contains(@class,'text-sm')][1]"
+-         )
+-         mangas = h.find_elements(
+-             By.XPATH, "following-sibling::div[contains(@class,'font-bold') and contains(@class,'text-sm')][2]"
+-         )
+-         schedule.append({
+-             "day": _clean(h.text or ""),
+-             "fecha": _clean(fecha[0].text if fecha else ""),
+-             "mangas": _clean(mangas[0].text if mangas else "")
+-         })
+-     return {"fields": fields, "schedule": schedule}
++ def _fallback_map_participant(driver, pid, By):
++     """Fallback laxo: 'label: valor', grids 2 columnas y clases originales."""
++     root_xpath = f"//div[@id='{pid}']"
++     fields = {}
++     # (a) "label: valor" en texto plano
++     try:
++         blocks = driver.find_elements(By.XPATH, root_xpath + "//div|" + root_xpath + "//p|" + root_xpath + "//li")
++         for el in blocks:
++             t = _clean(el.text or "")
++             m = re.match(r"^([^:：]{2,40})[:：]\s*(.+)$", t)
++             if m:
++                 lab, val = _clean(m.group(1)), _clean(m.group(2))
++                 if lab and val and lab not in fields:
++                     fields[lab] = val
++     except Exception:
++         pass
++     # (b) Grid 2 columnas (hermanos consecutivos)
++     try:
++         grid_items = driver.find_elements(By.XPATH, root_xpath + "//div[contains(@class,'grid')]/*")
++         for i in range(0, len(grid_items)-1, 2):
++             lab = _clean(grid_items[i].text)
++             val = _clean(grid_items[i+1].text)
++             if lab and val and lab not in fields:
++                 fields[lab] = val
++     except Exception:
++         pass
++     # (c) Clases originales (compatibilidad)
++     try:
++         labels = driver.find_elements(By.XPATH, root_xpath + "//div[contains(@class,'text-gray-500') and contains(@class,'text-sm')]")
++         values = driver.find_elements(By.XPATH, root_xpath + "//div[contains(@class,'font-bold') and contains(@class,'text-sm')]")
++         for lab_el, val_el in zip(labels, values):
++             lt, vt = _clean(lab_el.text or ""), _clean(val_el.text or "")
++             if lt and vt and lt not in fields:
++                 fields[lt] = vt
++     except Exception:
++         pass
++     # (d) Headers Día/Fecha/Mangas
++     schedule = []
++     try:
++         headers = driver.find_elements(By.XPATH, root_xpath + "//div[contains(@class,'border-b') and contains(@class,'border-gray-400')]")
++         for h in headers:
++             day = _clean(h.text or "")
++             fecha = h.find_elements(By.XPATH, "following-sibling::div[contains(@class,'text-sm')][1]")
++             mangas = h.find_elements(By.XPATH, "following-sibling::div[contains(@class,'text-sm')][2]")
++             schedule.append({
++                 "day": day,
++                 "fecha": _clean(fecha[0].text if fecha else ""),
++                 "mangas": _clean(mangas[0].text if mangas else "")
++             })
++     except Exception:
++         pass
++     return {"fields": fields, "schedule": schedule}
+***************
+*** 365,380 ****
+--- 367,429 ----
+  def _click_toggle_by_pid(...):
+      # (sin cambios)
+      pass
+  
++ # === Dump de HTML para depurar participantes problemáticos ===
++ def _dump_block_html(driver, pid, uuid, out_dir):
++     try:
++         html = driver.execute_script("return document.getElementById(arguments[0])?.outerHTML || '';", pid) or ""
++         os.makedirs(out_dir, exist_ok=True)
++         path = os.path.join(out_dir, f"debug_part_{uuid}_{pid}.html")
++         with open(path, "w", encoding="utf-8") as f:
++             f.write(html)
++         log(f"🧪 Dump bloque participante -> {path}")
++     except Exception:
++         pass
++ 
+***************
+*** 600,690 ****
+  def extract_participants_info():
+      # ...
+      for idxp, pid in enumerate(booking_ids, start=1):
+          if not pid or pid in processed_bids:
+              continue
+          # ...
+          try:
+              payload = driver.execute_script(JS_MAP_PARTICIPANT_RICH, pid)
+          except Exception:
+              payload = None
+          if not payload or not isinstance(payload, dict):
+              payload = _fallback_map_participant(driver, pid, By)
+  
++         # ⬇️ Si el mapeo trae < 3 campos no vacíos, vuelca HTML del bloque
++         try:
++             fields_probe = (payload.get("fields") or {})
++             non_empty = sum(1 for v in fields_probe.values() if v)
++             if non_empty < 3:
++                 _dump_block_html(driver, pid, (event.get('id') or 'evt'), os.path.join(OUT_DIR, "debug"))
++         except Exception:
++             pass
++ 
+          fields = (payload.get("fields") or {})
+          schedule = (payload.get("schedule") or [])
+          # pick() y row (sin cambios conceptuales)
+          # ...
+          # guardar incremental, etc.
+          # ...
+      # ...
+      return existing_list
+***************
+*** 820,860 ****
+--- 859,910 ----
+  def _get_driver(headless=True):
+      # ...
+      opts = Options()
+      # flags existentes...
++     # Parche GPT: fuerza idioma ES (reduce variaciones de etiquetas)
++     try:
++         opts.add_argument("--lang=es-ES,es")
++         opts.add_argument("--accept-lang=es-ES,es;q=0.9,en;q=0.8")
++     except Exception:
++         pass
+      # ...
+      return driver
