@@ -32,7 +32,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
-      # ---- Scraper ENV (puedes ajustarlos aquí o en workflow_dispatch) ----
+      # ---- Scraper ENV ----
       HEADLESS: "true"
       INCOGNITO: "true"
       OUT_DIR: "./output"
@@ -41,7 +41,7 @@ jobs:
       LIMIT_EVENTS: "${{ github.event.inputs.limit_events || '35' }}"
       MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '25' }}"
 
-      # Throttling + resume (02EventosProxParticipantesGitHubGPT.py)
+      # Throttling + resume
       THROTTLE_EVENT_S: "3.0"
       THROTTLE_PAGE_MIN_S: "1.2"
       THROTTLE_PAGE_MAX_S: "2.5"
@@ -51,7 +51,7 @@ jobs:
       RESUME: "true"
       RESUME_FILE: ""
 
-      # Credenciales Flow (usar Secrets)
+      # Credenciales Flow (secrets)
       FLOW_EMAILRq: "${{ secrets.FLOW_EMAILRQ }}"
       FLOW_PASSRq: "${{ secrets.FLOW_PASSRQ }}"
 
@@ -120,17 +120,44 @@ jobs:
           FLOW_PASSRq: "${{ env.FLOW_PASSRq }}"
         run: |
           echo "=== EJECUTANDO SCRAPER ==="
-          python ./02EventosProxParticipantesGitHubGPT.py --module all
+          # 👉 fuerza límite de eventos también por CLI
+          python ./02EventosProxParticipantesGitHubGPT.py --module all --limit-events "${LIMIT_EVENTS}"
           echo "=== SCRAPER COMPLETADO ==="
+
+      - name: Quick quality report (JSON completeness)
+        if: always()
+        run: |
+          echo "=== CALIDAD DE CAMPOS (participantes_detallados.json) ==="
+          if [ -f "./output/participantes_detallados.json" ]; then
+            python - << 'PY'
+import json, os
+pth="./output/participantes_detallados.json"
+data=json.load(open(pth,'r',encoding='utf-8'))
+rows=0
+counts={}
+for ev in data:
+    for p in ev.get("participantes",[]):
+        rows+=1
+        for k,v in p.items():
+            if k not in counts: counts[k]={"empty":0,"total":0}
+            counts[k]["total"]+=1
+            if (v is None) or (str(v).strip()==""):
+                counts[k]["empty"]+=1
+print(f"Participantes totales: {rows}")
+for k in sorted(counts):
+    t=counts[k]["total"]; e=counts[k]["empty"]; pct = (e*100.0/t) if t else 0
+    print(f"{k:22s} vacíos: {e:4d}/{t:4d}  ({pct:5.1f}%)")
+PY
+          else
+            echo "No existe ./output/participantes_detallados.json"
+          fi
 
       - name: Verify generated files
         run: |
           echo '=== VERIFICANDO ARCHIVOS GENERADOS ==='
           ls -la ./output/ || true
 
-          # Requerido siempre:
           MUST_HAVE=("01events.json")
-          # Al menos uno de estos:
           ONE_OF=("02info.json" "participantes_detallados.json")
 
           missing=0
@@ -144,7 +171,6 @@ jobs:
             fi
           done
 
-          # Comprobar que exista al menos uno de los opcionales
           found_optional=0
           for opt in "${ONE_OF[@]}"; do
             if [ -f "./output/$opt" ]; then
@@ -198,7 +224,6 @@ jobs:
           BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
           echo "Subiendo a: ${BASE_URL}/"
 
-          # Construye lista según existan
           COMPRESSED_FILES=()
           for f in "01events.json.gz" "02info.json.gz" "participantes_detallados.json.gz"; do
             [ -f "./output/$f" ] && COMPRESSED_FILES+=("$f")
@@ -222,7 +247,6 @@ jobs:
                  "${BASE_URL}/$file" \
             && echo "✅ $file subido" || {
               echo "❌ Error subiendo $file"
-              # Intentar el original sin comprimir
               orig="${file%.gz}"
               if [ -f "./output/$orig" ]; then
                 echo "🔄 Intentando subir original: $orig"
@@ -237,7 +261,6 @@ jobs:
             sleep 1
           done
 
-          # Subir 01events.json sin comprimir (pequeño) si existe
           if [ -f "./output/01events.json" ]; then
             echo "📤 Subiendo 01events.json (sin comprimir)"
             curl --fail \
@@ -277,6 +300,16 @@ jobs:
           path: ./output/*.gz
           if-no-files-found: warn
           retention-days: 3
+
+      # 👉 NUEVO: sube los HTML de depuración si existen
+      - name: Upload participant debug HTML (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: participants-debug-html
+          path: ./output/debug_part_*.html
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Debug on failure
         if: failure()
