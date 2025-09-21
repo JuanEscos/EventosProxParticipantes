@@ -132,6 +132,7 @@ jobs:
           if [ -f "./output/participantes_detallados.json" ]; then
             python - <<'PY'
 import json, sys
+
 pth = "./output/participantes_detallados.json"
 try:
     with open(pth, "r", encoding="utf-8") as f:
@@ -160,6 +161,8 @@ PY
           else
             echo "No existe ./output/participantes_detallados.json"
           fi
+
+
 
 
       - name: Verify generated files
