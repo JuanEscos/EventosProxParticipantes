@@ -102,8 +102,8 @@ jobs:
       - name: Create .env file from secrets
         run: |
           cat > .env << EOF
-FLOW_EMAIL=${{ secrets.FLOW_EMAIL }}
-FLOW_PASS=${{ secrets.FLOW_PASS }}
+FLOW_EMAIL=${{ secrets.FLOW_EMAILRq }}
+FLOW_PASS=${{ secrets.FLOW_PASSRq }}
 HEADLESS=${{ env.HEADLESS }}
 INCOGNITO=${{ env.INCOGNITO }}
 OUT_DIR=${{ env.OUT_DIR }}
