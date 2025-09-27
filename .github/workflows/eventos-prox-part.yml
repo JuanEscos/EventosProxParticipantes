@@ -117,57 +117,48 @@ jobs:
         run: |
           echo "=== ANÁLISIS DE CONTENIDO JSON ==="
           
-          # Crear un script temporal simple
-          cat > /tmp/analyze.py << 'SCRIPT_EOF'
-import json
-import os
-
-out_dir = os.environ.get('OUT_DIR', './output')
-
-# Analizar 01events.json
-events_file = os.path.join(out_dir, '01events.json')
-if os.path.exists(events_file):
-    print('📊 01events.json:')
-    try:
-        with open(events_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        print(f'   Número de eventos: {len(data)}')
-        for i, event in enumerate(data[:3]):
-            nombre = event.get('nombre', 'N/A')
-            print(f'   Evento {i+1}: {nombre}')
-    except Exception as e:
-        print(f'   Error: {e}')
-else:
-    print('❌ 01events.json no encontrado')
-
-print()
-
-# Analizar 02info.json
-info_file = os.path.join(out_dir, '02info.json')
-if os.path.exists(info_file):
-    print('📊 02info.json:')
-    try:
-        with open(info_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        events_with_participants = [e for e in data if e.get('numero_participantes', 0) > 0]
-        total_participants = sum(e.get('numero_participantes', 0) for e in data)
-        print(f'   Eventos con participantes: {len(events_with_participants)}')
-        print(f'   Total participantes: {total_participants}')
-        
-        if events_with_participants:
-            print('   Top 3 eventos:')
-            sorted_events = sorted(events_with_participants, key=lambda x: x.get('numero_participantes', 0), reverse=True)
-            for event in sorted_events[:3]:
-                nombre = event.get('nombre', 'N/A')
-                participantes = event.get('numero_participantes', 0)
-                print(f'     - {nombre}: {participantes} participantes')
-    except Exception as e:
-        print(f'   Error: {e}')
-else:
-    print('❌ 02info.json no encontrado')
-SCRIPT_EOF
-
-          python3 /tmp/analyze.py
+          # Crear script Python línea por línea (método seguro)
+          echo "import json" > analyze.py
+          echo "import os" >> analyze.py
+          echo "" >> analyze.py
+          echo "out_dir = os.environ.get('OUT_DIR', './output')" >> analyze.py
+          echo "" >> analyze.py
+          echo "# Analizar 01events.json" >> analyze.py
+          echo "events_file = os.path.join(out_dir, '01events.json')" >> analyze.py
+          echo "if os.path.exists(events_file):" >> analyze.py
+          echo "    print('📊 01events.json:')" >> analyze.py
+          echo "    try:" >> analyze.py
+          echo "        with open(events_file, 'r', encoding='utf-8') as f:" >> analyze.py
+          echo "            data = json.load(f)" >> analyze.py
+          echo "        print(f'   Número de eventos: {len(data)}')" >> analyze.py
+          echo "        for i, event in enumerate(data[:3]):" >> analyze.py
+          echo "            nombre = event.get('nombre', 'N/A')" >> analyze.py
+          echo "            print(f'   Evento {i+1}: {nombre}')" >> analyze.py
+          echo "    except Exception as e:" >> analyze.py
+          echo "        print(f'   Error: {e}')" >> analyze.py
+          echo "else:" >> analyze.py
+          echo "    print('❌ 01events.json no encontrado')" >> analyze.py
+          echo "" >> analyze.py
+          echo "print()" >> analyze.py
+          echo "" >> analyze.py
+          echo "# Analizar 02info.json" >> analyze.py
+          echo "info_file = os.path.join(out_dir, '02info.json')" >> analyze.py
+          echo "if os.path.exists(info_file):" >> analyze.py
+          echo "    print('📊 02info.json:')" >> analyze.py
+          echo "    try:" >> analyze.py
+          echo "        with open(info_file, 'r', encoding='utf-8') as f:" >> analyze.py
+          echo "            data = json.load(f)" >> analyze.py
+          echo "        events_with_participants = [e for e in data if e.get('numero_participantes', 0) > 0]" >> analyze.py
+          echo "        total_participants = sum(e.get('numero_participantes', 0) for e in data)" >> analyze.py
+          echo "        print(f'   Eventos con participantes: {len(events_with_participants)}')" >> analyze.py
+          echo "        print(f'   Total participantes: {total_participants}')" >> analyze.py
+          echo "    except Exception as e:" >> analyze.py
+          echo "        print(f'   Error: {e}')" >> analyze.py
+          echo "else:" >> analyze.py
+          echo "    print('❌ 02info.json no encontrado')" >> analyze.py
+          
+          python3 analyze.py
+          rm -f analyze.py
 
       - name: Compress JSON files for backup
         run: |
