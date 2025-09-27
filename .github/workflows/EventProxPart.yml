@@ -130,14 +130,14 @@ jobs:
           echo "=== ARCHIVO .env CONFIGURADO ==="
           cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/'
 
-      - name: Run EventosProxconParticipantes.py scraper
+      - name: Run EventosProxParticipantesDeep.py scraper
         timeout-minutes: 30
         env:
           FLOW_EMAIL: "${{ secrets.FLOW_EMAIL }}"
           FLOW_PASS: "${{ secrets.FLOW_PASS }}"
         run: |
           echo "=== INICIANDO SCRAPER ==="
-          echo "Script: EventosProxconParticipantes.py"
+          echo "Script: EventosProxParticipantesDeep.py"
           echo "Módulo: all"
           echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
           echo "Timeout máximo: ${{ env.MAX_RUNTIME_MIN }} minutos"
