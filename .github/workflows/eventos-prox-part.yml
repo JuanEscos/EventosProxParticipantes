@@ -38,8 +38,8 @@ jobs:
       SCROLL_WAIT_S: "2.0"
       MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
       MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '15' }}"
-      FLOW_EMAIL: "${{ secrets.FLOW_EMAILRq }}"
-      FLOW_PASS: "${{ secrets.FLOW_PASSRq }}"
+      FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
+      FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
 
     steps:
       - name: Checkout repository
@@ -102,8 +102,8 @@ jobs:
       - name: Create .env file from secrets
         run: |
           cat > .env << EOF
-FLOW_EMAIL=${{ secrets.FLOW_EMAILRq }}
-FLOW_PASS=${{ secrets.FLOW_PASSRq }}
+FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}
+FLOW_PASS=${{ secrets.FLOW_PASSRQ }}
 HEADLESS=${{ env.HEADLESS }}
 INCOGNITO=${{ env.INCOGNITO }}
 OUT_DIR=${{ env.OUT_DIR }}
