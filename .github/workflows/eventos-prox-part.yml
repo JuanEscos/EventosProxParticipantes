@@ -10,7 +10,7 @@ on:
       max_runtime_min:
         description: "Corte ordenado a los N minutos (0 = sin límite)"
         required: false
-        default: "15"
+        default: "60"
   schedule:
     # 03:40 UTC ≈ 05:40 Europe/Madrid (según DST)
     - cron: "40 3 * * *"
