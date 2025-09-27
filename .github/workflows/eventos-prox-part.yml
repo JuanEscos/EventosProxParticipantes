@@ -1,0 +1,326 @@
+name: EventProxPart (FlowAgility eventos + participantes) Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit_events:
+        description: "Máximo de eventos a procesar (0 = sin límite)"
+        required: false
+        default: "2"
+      max_runtime_min:
+        description: "Corte ordenado a los N minutos (0 = sin límite)"
+        required: false
+        default: "15"
+  schedule:
+    # 03:40 UTC ≈ 05:40 Europe/Madrid (según DST)
+    - cron: "40 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eventproxpart-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-scrape:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      TZ: Europe/Madrid
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      HEADLESS: "true"
+      INCOGNITO: "true"
+      OUT_DIR: "./output"
+      MAX_SCROLLS: "8"
+      SCROLL_WAIT_S: "2.0"
+      MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
+      MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '15' }}"
+      FLOW_EMAIL: "${{ secrets.FLOW_EMAIL }}"
+      FLOW_PASS: "${{ secrets.FLOW_PASS }}"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl unzip
+
+      - name: Install Chrome Browser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          echo "Chrome version:"
+          google-chrome-stable --version
+
+      - name: Install ChromeDriver
+        run: |
+          CHROME_VERSION=$(google-chrome-stable --version | grep -oP '\d+\.\d+\.\d+\.\d+' | cut -d. -f1-3)
+          echo "Chrome version: $CHROME_VERSION"
+          
+          CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
+          wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
+          unzip -q chromedriver_linux64.zip
+          sudo mv chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
+          rm chromedriver_linux64.zip
+          
+          echo "ChromeDriver version:"
+          chromedriver --version
+
+      - name: Verify Chrome and ChromeDriver
+        run: |
+          echo "=== VERIFICACIÓN DE INSTALACIÓN ==="
+          which google-chrome-stable && google-chrome-stable --version || echo "❌ Chrome no encontrado"
+          which chromedriver && chromedriver --version || echo "❌ ChromeDriver no encontrado"
+          
+          timeout 10s google-chrome-stable --headless --no-sandbox --disable-gpu --dump-dom https://example.com > /dev/null 2>&1 && \
+          echo "✅ Chrome funciona correctamente" || \
+          echo "⚠️  Chrome tiene problemas de ejecución"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium beautifulsoup4 python-dotenv
+          pip list | grep -E "(selenium|beautifulsoup|dotenv)"
+
+      - name: Create output directory
+        run: |
+          mkdir -p "${{ env.OUT_DIR }}"
+          echo "Directorio de salida creado: ${{ env.OUT_DIR }}"
+
+      - name: Create .env file from secrets
+        run: |
+          cat > .env << EOF
+FLOW_EMAIL=${{ secrets.FLOW_EMAIL }}
+FLOW_PASS=${{ secrets.FLOW_PASS }}
+HEADLESS=${{ env.HEADLESS }}
+INCOGNITO=${{ env.INCOGNITO }}
+OUT_DIR=${{ env.OUT_DIR }}
+MAX_SCROLLS=${{ env.MAX_SCROLLS }}
+SCROLL_WAIT_S=${{ env.SCROLL_WAIT_S }}
+EOF
+          echo "=== ARCHIVO .env CONFIGURADO ==="
+          cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/'
+
+      - name: Run EventosProxconParticipantes.py scraper
+        timeout-minutes: 30
+        run: |
+          echo "=== INICIANDO SCRAPER ==="
+          echo "Script: EventosProxconParticipantes.py"
+          echo "Módulo: all"
+          echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
+          echo "Timeout máximo: ${{ env.MAX_RUNTIME_MIN }} minutos"
+          echo ""
+          
+          python EventosProxconParticipantes.py --module all
+          
+          SCRAPER_EXIT_CODE=$?
+          echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
+          
+          if [ $SCRAPER_EXIT_CODE -eq 0 ]; then
+            echo "✅ Scraper ejecutado exitosamente"
+          else
+            echo "❌ Scraper falló con código $SCRAPER_EXIT_CODE"
+          fi
+
+      - name: Verify generated JSON files
+        run: |
+          echo "=== VERIFICACIÓN DE ARCHIVOS GENERADOS ==="
+          echo "Contenido del directorio ${{ env.OUT_DIR }}:"
+          ls -la "${{ env.OUT_DIR }}" || echo "❌ No se pudo listar el directorio"
+          
+          REQUIRED_FILES=("01events.json" "02info.json")
+          ALL_FILES_EXIST=true
+          
+          for file in "${REQUIRED_FILES[@]}"; do
+            FILE_PATH="${{ env.OUT_DIR }}/$file"
+            if [ -f "$FILE_PATH" ]; then
+              FILE_SIZE=$(stat -c%s "$FILE_PATH")
+              FILE_LINES=$(wc -l < "$FILE_PATH" 2>/dev/null || echo "N/A")
+              echo "✅ $file - Tamaño: ${FILE_SIZE} bytes, Líneas: ${FILE_LINES}"
+            else
+              echo "❌ $file - NO ENCONTRADO"
+              ALL_FILES_EXIST=false
+            fi
+            echo ""
+          done
+          
+          DATED_FILES=$(ls "${{ env.OUT_DIR }}"/0*.json 2>/dev/null | wc -l || echo "0")
+          echo "📅 Archivos con fecha encontrados: $DATED_FILES"
+          
+          if [ "$ALL_FILES_EXIST" = true ]; then
+            echo "✅ TODOS los archivos requeridos están presentes"
+          else
+            echo "❌ Faltan algunos archivos requeridos"
+          fi
+
+      - name: Analyze JSON content
+        run: |
+          echo "=== ANÁLISIS DE CONTENIDO JSON ==="
+          
+          # Crear script Python separado para mejor legibilidad
+          cat > analyze_events.py << 'EOF'
+import json
+import os
+import sys
+
+def analyze_events():
+    out_dir = os.environ.get('OUT_DIR', './output')
+    events_file = os.path.join(out_dir, '01events.json')
+    info_file = os.path.join(out_dir, '02info.json')
+    
+    # Analizar 01events.json
+    if os.path.exists(events_file):
+        print("📊 Análisis de 01events.json:")
+        try:
+            with open(events_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f'   Número de eventos: {len(data)}')
+            for i, event in enumerate(data[:3]):
+                print(f'   Evento {i+1}: {event.get("nombre", "N/A")}')
+                print(f'     ID: {event.get("id", "N/A")}')
+                print(f'     Club: {event.get("club", "N/A")}')
+                participantes_url = event.get("enlaces", {}).get("participantes", "N/A")
+                print(f'     Enlace participantes: {participantes_url}')
+        except Exception as e:
+            print(f'   Error analizando 01events.json: {e}')
+    else:
+        print("❌ 01events.json no encontrado")
+    
+    print()
+    
+    # Analizar 02info.json
+    if os.path.exists(info_file):
+        print("📊 Análisis de 02info.json:")
+        try:
+            with open(info_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f'   Número de eventos procesados: {len(data)}')
+            
+            events_with_participants = [e for e in data if e.get('numero_participantes', 0) > 0]
+            total_participants = sum(e.get('numero_participantes', 0) for e in data)
+            
+            print(f'   Eventos con participantes: {len(events_with_participants)}')
+            print(f'   Total participantes: {total_participants}')
+            
+            if events_with_participants:
+                print('   Eventos con más participantes:')
+                sorted_events = sorted(events_with_participants, 
+                                    key=lambda x: x.get('numero_participantes', 0), 
+                                    reverse=True)
+                for event in sorted_events[:3]:
+                    nombre = event.get("nombre", "N/A")
+                    participantes = event.get("numero_participantes", 0)
+                    print(f'     - {nombre}: {participantes} participantes')
+        except Exception as e:
+            print(f'   Error analizando 02info.json: {e}')
+    else:
+        print("❌ 02info.json no encontrado")
+
+if __name__ == "__main__":
+    analyze_events()
+EOF
+
+          python analyze_events.py
+
+      - name: Compress JSON files for backup
+        run: |
+          echo "=== COMPRIMIENDO ARCHIVOS PARA BACKUP ==="
+          
+          for json_file in "${{ env.OUT_DIR }}"/*.json; do
+            if [ -f "$json_file" ]; then
+              gzip -9 -k "$json_file"
+              original_size=$(stat -c%s "$json_file")
+              compressed_size=$(stat -c%s "${json_file}.gz")
+              compression_ratio=$((compressed_size * 100 / original_size))
+              echo "✅ $(basename "$json_file"): ${original_size} bytes → ${compressed_size} bytes (${compression_ratio}%)"
+            fi
+          done
+          
+          echo "Archivos comprimidos:"
+          ls -la "${{ env.OUT_DIR }}"/*.gz 2>/dev/null || echo "No hay archivos comprimidos"
+
+      - name: Create backup directory
+        run: |
+          mkdir -p ./backup
+          echo "Directorio backup creado"
+
+      - name: Backup uncompressed files
+        run: |
+          echo "=== CREANDO BACKUP DE ARCHIVOS SIN COMPRIMIR ==="
+          cp -r "${{ env.OUT_DIR }}" ./backup/ || echo "No se pudo crear backup"
+          echo "Backup creado en ./backup/output/"
+
+      - name: Upload JSON files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-json-output
+          path: |
+            ${{ env.OUT_DIR }}/*.json
+            ${{ env.OUT_DIR }}/*.gz
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload backup as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-backup
+          path: |
+            ./backup/
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Final summary
+        run: |
+          echo "=== RESUMEN FINAL DEL WORKFLOW ==="
+          echo "🎯 Configuración utilizada:"
+          echo "   - Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
+          echo "   - Máximo tiempo ejecución: ${{ env.MAX_RUNTIME_MIN }} minutos"
+          echo "   - Directorio salida: ${{ env.OUT_DIR }}"
+          
+          echo ""
+          echo "📁 Archivos generados:"
+          if [ -d "${{ env.OUT_DIR }}" ]; then
+            for file in "${{ env.OUT_DIR }}"/*; do
+              if [ -f "$file" ]; then
+                size=$(stat -c%s "$file" 2>/dev/null || echo "N/A")
+                echo "   - $(basename "$file"): $size bytes"
+              fi
+            done
+          else
+            echo "   ❌ No se generaron archivos"
+          fi
+          
+          echo ""
+          echo "⏰ Hora de finalización: $(date)"
+          echo "✅ Workflow completado"
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          echo "=== DEBUGGING POR FALLO ==="
+          echo "❌ El workflow ha fallado"
+          
+          echo ""
+          echo "📋 Información del sistema:"
+          echo "Ubuntu version: $(lsb_release -d || echo 'N/A')"
+          echo "Python version: $(python --version || echo 'N/A')"
+          
+          echo ""
+          echo "📁 Estructura de directorios:"
+          echo "Directorio actual:"
+          ls -la
+          echo ""
+          echo "Directorio output:"
+          ls -la "${{ env.OUT_DIR }}" 2>/dev/null || echo "No existe"
