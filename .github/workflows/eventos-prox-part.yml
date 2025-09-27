@@ -113,17 +113,17 @@ EOF
           echo "=== ARCHIVO .env CONFIGURADO ==="
           cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/'
 
-      - name: Run EventosProxconParticipantes.py scraper
+      - name: Run EventosProxParticipantesDeep.py scraper
         timeout-minutes: 30
         run: |
           echo "=== INICIANDO SCRAPER ==="
-          echo "Script: EventosProxconParticipantes.py"
+          echo "Script: EventosProxParticipantesDeep.py"
           echo "Módulo: all"
           echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
           echo "Timeout máximo: ${{ env.MAX_RUNTIME_MIN }} minutos"
           echo ""
           
-          python EventosProxconParticipantes.py --module all
+          python EventosProxParticipantesDeep.py --module all
           
           SCRAPER_EXIT_CODE=$?
           echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
