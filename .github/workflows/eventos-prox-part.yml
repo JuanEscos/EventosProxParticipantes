@@ -117,68 +117,48 @@ jobs:
         run: |
           echo "=== ANÁLISIS DE CONTENIDO JSON ==="
           
-          # Crear script Python separado para mejor legibilidad
-          cat > analyze_events.py << 'EOF'
-import json
-import os
-import sys
-
-def analyze_events():
-    out_dir = os.environ.get('OUT_DIR', './output')
-    events_file = os.path.join(out_dir, '01events.json')
-    info_file = os.path.join(out_dir, '02info.json')
-    
-    # Analizar 01events.json
-    if os.path.exists(events_file):
-        print("📊 Análisis de 01events.json:")
-        try:
-            with open(events_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            print(f'   Número de eventos: {len(data)}')
-            for i, event in enumerate(data[:3]):
-                print(f'   Evento {i+1}: {event.get("nombre", "N/A")}')
-                print(f'     ID: {event.get("id", "N/A")}')
-                print(f'     Club: {event.get("club", "N/A")}')
-                participantes_url = event.get("enlaces", {}).get("participantes", "N/A")
-                print(f'     Enlace participantes: {participantes_url}')
-        except Exception as e:
-            print(f'   Error analizando 01events.json: {e}')
-    else:
-        print("❌ 01events.json no encontrado")
-    
-    print()
-    
-    # Analizar 02info.json
-    if os.path.exists(info_file):
-        print("📊 Análisis de 02info.json:")
-        try:
-            with open(info_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            print(f'   Número de eventos procesados: {len(data)}')
-            
-            events_with_participants = [e for e in data if e.get('numero_participantes', 0) > 0]
-            total_participants = sum(e.get('numero_participantes', 0) for e in data)
-            
-            print(f'   Eventos con participantes: {len(events_with_participants)}')
-            print(f'   Total participantes: {total_participants}')
-            
-            if events_with_participants:
-                print('   Eventos con más participantes:')
-                sorted_events = sorted(events_with_participants, 
-                                    key=lambda x: x.get('numero_participantes', 0), 
-                                    reverse=True)
-                for event in sorted_events[:3]:
-                    nombre = event.get("nombre", "N/A")
-                    participantes = event.get("numero_participantes", 0)
-                    print(f'     - {nombre}: {participantes} participantes')
-        except Exception as e:
-            print(f'   Error analizando 02info.json: {e}')
-    else:
-        print("❌ 02info.json no encontrado")
-
-if __name__ == "__main__":
-    analyze_events()
-EOF
+          # Crear script Python usando printf (más seguro)
+          printf '%s\n' \
+            'import json' \
+            'import os' \
+            'import sys' \
+            '' \
+            'def analyze_events():' \
+            '    out_dir = os.environ.get("OUT_DIR", "./output")' \
+            '    events_file = os.path.join(out_dir, "01events.json")' \
+            '    info_file = os.path.join(out_dir, "02info.json")' \
+            '' \
+            '    if os.path.exists(events_file):' \
+            '        print("📊 Análisis de 01events.json:")' \
+            '        try:' \
+            '            with open(events_file, "r", encoding="utf-8") as f:' \
+            '                data = json.load(f)' \
+            '            print(f"   Número de eventos: {len(data)}")' \
+            '            for i, event in enumerate(data[:3]):' \
+            '                print(f"   Evento {i+1}: {event.get(\"nombre\", \"N/A\")}")' \
+            '                print(f"     ID: {event.get(\"id\", \"N/A\")}")' \
+            '                print(f"     Club: {event.get(\"club\", \"N/A\")}")' \
+            '        except Exception as e:' \
+            '            print(f"   Error: {e}")' \
+            '    else:' \
+            '        print("❌ 01events.json no encontrado")' \
+            '' \
+            '    if os.path.exists(info_file):' \
+            '        print("📊 Análisis de 02info.json:")' \
+            '        try:' \
+            '            with open(info_file, "r", encoding="utf-8") as f:' \
+            '                data = json.load(f)' \
+            '            events_with_participants = [e for e in data if e.get("numero_participantes", 0) > 0]' \
+            '            total_participants = sum(e.get("numero_participantes", 0) for e in data)' \
+            '            print(f"   Eventos con participantes: {len(events_with_participants)}")' \
+            '            print(f"   Total participantes: {total_participants}")' \
+            '        except Exception as e:' \
+            '            print(f"   Error: {e}")' \
+            '    else:' \
+            '        print("❌ 02info.json no encontrado")' \
+            '' \
+            'if __name__ == "__main__":' \
+            '    analyze_events()' > analyze_events.py
 
           python analyze_events.py
 
