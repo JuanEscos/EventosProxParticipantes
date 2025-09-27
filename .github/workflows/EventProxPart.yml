@@ -145,7 +145,7 @@ jobs:
           echo ""
           
           # Ejecutar el scraper
-          python EventosProxconParticipantes.py --module all
+          python EventosProxParticipantesDeep.py --module all
           
           SCRAPER_EXIT_CODE=$?
           echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
