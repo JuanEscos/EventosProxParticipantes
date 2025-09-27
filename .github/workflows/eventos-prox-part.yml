@@ -113,25 +113,6 @@ jobs:
           SCRAPER_EXIT_CODE=$?
           echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
 
-      - name: Verify generated JSON files
-        run: |
-          echo "=== VERIFICACIÓN DE ARCHIVOS GENERADOS ==="
-          ls -la "${{ env.OUT_DIR }}" || echo "❌ No se pudo listar el directorio"
-          
-          REQUIRED_FILES=("01events.json" "02info.json")
-          ALL_FILES_EXIST=true
-          
-          for file in "${REQUIRED_FILES[@]}"; do
-            FILE_PATH="${{ env.OUT_DIR }}/$file"
-            if [ -f "$FILE_PATH" ]; then
-              FILE_SIZE=$(stat -c%s "$FILE_PATH")
-              echo "✅ $file - Tamaño: ${FILE_SIZE} bytes"
-            else
-              echo "❌ $file - NO ENCONTRADO"
-              ALL_FILES_EXIST=false
-            fi
-          done
-
       - name: Analyze JSON content
         run: |
           echo "=== ANÁLISIS DE CONTENIDO JSON ==="
@@ -198,6 +179,8 @@ def analyze_events():
 if __name__ == "__main__":
     analyze_events()
 EOF
+
+          python analyze_events.py
 
           python analyze_events.py
 
