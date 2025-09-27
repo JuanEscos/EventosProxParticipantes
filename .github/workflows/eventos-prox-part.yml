@@ -4,192 +4,94 @@ on:
   workflow_dispatch:
     inputs:
       limit_events:
-        description: "Máximo de eventos a procesar (0 = sin límite)"
+        description: "Máximo de eventos a procesar"
         required: false
         default: "2"
       max_runtime_min:
-        description: "Corte ordenado a los N minutos (0 = sin límite)"
+        description: "Tiempo máximo de ejecución (minutos)"
         required: false
         default: "15"
-  schedule:
-    - cron: "40 3 * * *"
 
 permissions:
   contents: read
 
-concurrency:
-  group: eventproxpart-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   run-scrape:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     env:
-      TZ: Europe/Madrid
-      PYTHONUNBUFFERED: "1"
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      HEADLESS: "true"
-      INCOGNITO: "true"
       OUT_DIR: "./output"
-      MAX_SCROLLS: "8"
-      SCROLL_WAIT_S: "2.0"
-      MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
-      MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '15' }}"
+      HEADLESS: "true"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget curl unzip
-
-      - name: Install Chrome Browser
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-          google-chrome-stable --version
-
-      - name: Install ChromeDriver
-        run: |
-          CHROME_VERSION=$(google-chrome-stable --version | grep -oP '\d+\.\d+\.\d+\.\d+' | cut -d. -f1-3)
-          CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
-          wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
-          unzip -q chromedriver_linux64.zip
-          sudo mv chromedriver /usr/local/bin/
-          sudo chmod +x /usr/local/bin/chromedriver
-          rm chromedriver_linux64.zip
-          chromedriver --version
-
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install selenium beautifulsoup4 python-dotenv
 
       - name: Create output directory
-        run: |
-          mkdir -p "${{ env.OUT_DIR }}"
+        run: mkdir -p $OUT_DIR
 
-      - name: Create .env file from secrets
+      - name: Create .env file
         run: |
-          {
-            echo "FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}"
-            echo "FLOW_PASS=${{ secrets.FLOW_PASSRQ }}"
-            echo "HEADLESS=${{ env.HEADLESS }}"
-            echo "INCOGNITO=${{ env.INCOGNITO }}"
-            echo "OUT_DIR=${{ env.OUT_DIR }}"
-            echo "MAX_SCROLLS=${{ env.MAX_SCROLLS }}"
-            echo "SCROLL_WAIT_S=${{ env.SCROLL_WAIT_S }}"
-          } > .env
-          echo "=== ARCHIVO .env CONFIGURADO ==="
-          sed 's/FLOW_PASS=.*/FLOW_PASS=***/' .env
+          echo "FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}" > .env
+          echo "FLOW_PASS=${{ secrets.FLOW_PASSRQ }}" >> .env
+          echo "HEADLESS=true" >> .env
+          echo "OUT_DIR=./output" >> .env
 
-      - name: Run EventosProxParticipantesDeep.py scraper
+      - name: Run scraper
         timeout-minutes: 30
-        env:
-          FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
-          FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
         run: |
-          echo "=== INICIANDO SCRAPER ==="
-          echo "Script: EventosProxParticipantesDeep.py"
-          echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
-          
-          if [ ! -f "EventosProxParticipantesDeep.py" ]; then
-            echo "❌ ERROR: El archivo EventosProxParticipantesDeep.py no existe"
-            ls -la *.py
+          echo "🔧 Ejecutando scraper..."
+          if [ -f "EventosProxParticipantesDeep.py" ]; then
+            python EventosProxParticipantesDeep.py --module all
+          else
+            echo "❌ Error: No se encuentra el archivo EventosProxParticipantesDeep.py"
             exit 1
           fi
-          
-          python EventosProxParticipantesDeep.py --module all
-          SCRAPER_EXIT_CODE=$?
-          echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
 
       - name: Analyze JSON content
         run: |
           echo "=== ANÁLISIS DE CONTENIDO JSON ==="
           
-          # Crear script Python línea por línea (método seguro)
-          echo "import json" > analyze.py
-          echo "import os" >> analyze.py
-          echo "" >> analyze.py
-          echo "out_dir = os.environ.get('OUT_DIR', './output')" >> analyze.py
-          echo "" >> analyze.py
-          echo "# Analizar 01events.json" >> analyze.py
-          echo "events_file = os.path.join(out_dir, '01events.json')" >> analyze.py
-          echo "if os.path.exists(events_file):" >> analyze.py
-          echo "    print('📊 01events.json:')" >> analyze.py
-          echo "    try:" >> analyze.py
-          echo "        with open(events_file, 'r', encoding='utf-8') as f:" >> analyze.py
-          echo "            data = json.load(f)" >> analyze.py
-          echo "        print(f'   Número de eventos: {len(data)}')" >> analyze.py
-          echo "        for i, event in enumerate(data[:3]):" >> analyze.py
-          echo "            nombre = event.get('nombre', 'N/A')" >> analyze.py
-          echo "            print(f'   Evento {i+1}: {nombre}')" >> analyze.py
-          echo "    except Exception as e:" >> analyze.py
-          echo "        print(f'   Error: {e}')" >> analyze.py
-          echo "else:" >> analyze.py
-          echo "    print('❌ 01events.json no encontrado')" >> analyze.py
-          echo "" >> analyze.py
-          echo "print()" >> analyze.py
-          echo "" >> analyze.py
-          echo "# Analizar 02info.json" >> analyze.py
-          echo "info_file = os.path.join(out_dir, '02info.json')" >> analyze.py
-          echo "if os.path.exists(info_file):" >> analyze.py
-          echo "    print('📊 02info.json:')" >> analyze.py
-          echo "    try:" >> analyze.py
-          echo "        with open(info_file, 'r', encoding='utf-8') as f:" >> analyze.py
-          echo "            data = json.load(f)" >> analyze.py
-          echo "        events_with_participants = [e for e in data if e.get('numero_participantes', 0) > 0]" >> analyze.py
-          echo "        total_participants = sum(e.get('numero_participantes', 0) for e in data)" >> analyze.py
-          echo "        print(f'   Eventos con participantes: {len(events_with_participants)}')" >> analyze.py
-          echo "        print(f'   Total participantes: {total_participants}')" >> analyze.py
-          echo "    except Exception as e:" >> analyze.py
-          echo "        print(f'   Error: {e}')" >> analyze.py
-          echo "else:" >> analyze.py
-          echo "    print('❌ 02info.json no encontrado')" >> analyze.py
+          # Método simple y seguro
+          if [ -f "$OUT_DIR/01events.json" ]; then
+            echo "📊 01events.json:"
+            count=$(python3 -c "import json; print(len(json.load(open('$OUT_DIR/01events.json'))))" 2>/dev/null || echo "Error")
+            echo "   Eventos encontrados: $count"
+          else
+            echo "❌ 01events.json no existe"
+          fi
           
-          python3 analyze.py
-          rm -f analyze.py
+          if [ -f "$OUT_DIR/02info.json" ]; then
+            echo "📊 02info.json:"
+            python3 -c "
+import json
+try:
+    data = json.load(open('$OUT_DIR/02info.json', 'r', encoding='utf-8'))
+    with_parts = [e for e in data if e.get('numero_participantes', 0) > 0]
+    total = sum(e.get('numero_participantes', 0) for e in data)
+    print(f'   Eventos con participantes: {len(with_parts)}')
+    print(f'   Total participantes: {total}')
+except Exception as e:
+    print('   Error analizando el archivo')
+"
+          else
+            echo "❌ 02info.json no existe"
+          fi
 
-      - name: Compress JSON files for backup
-        run: |
-          echo "=== COMPRIMIENDO ARCHIVOS PARA BACKUP ==="
-          for json_file in "${{ env.OUT_DIR }}"/*.json; do
-            if [ -f "$json_file" ]; then
-              gzip -9 -k "$json_file"
-              original_size=$(stat -c%s "$json_file")
-              compressed_size=$(stat -c%s "${json_file}.gz")
-              echo "✅ $(basename "$json_file") comprimido"
-            fi
-          done
-
-      - name: Create backup and upload artifacts
-        run: |
-          mkdir -p ./backup
-          cp -r "${{ env.OUT_DIR }}" ./backup/ || echo "No se pudo crear backup"
-
-      - name: Upload JSON files as artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: scraper-json-output
-          path: |
-            ${{ env.OUT_DIR }}/*.json
-            ${{ env.OUT_DIR }}/*.gz
+          name: scraper-results
+          path: output/
           retention-days: 7
-          if-no-files-found: warn
-
-      - name: Final summary
-        run: |
-          echo "=== RESUMEN FINAL ==="
-          echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
-          echo "Directorios generados:"
-          find . -name "output" -o -name "backup" -type d | head -10
