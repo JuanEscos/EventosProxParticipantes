@@ -10,9 +10,8 @@ on:
       max_runtime_min:
         description: "Corte ordenado a los N minutos (0 = sin límite)"
         required: false
-        default: "60"
+        default: "15"
   schedule:
-    # 03:40 UTC ≈ 05:40 Europe/Madrid (según DST)
     - cron: "40 3 * * *"
 
 permissions:
@@ -58,48 +57,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-          echo "Chrome version:"
           google-chrome-stable --version
 
       - name: Install ChromeDriver
         run: |
           CHROME_VERSION=$(google-chrome-stable --version | grep -oP '\d+\.\d+\.\d+\.\d+' | cut -d. -f1-3)
-          echo "Chrome version: $CHROME_VERSION"
-          
           CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
           wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
           unzip -q chromedriver_linux64.zip
           sudo mv chromedriver /usr/local/bin/
           sudo chmod +x /usr/local/bin/chromedriver
           rm chromedriver_linux64.zip
-          
-          echo "ChromeDriver version:"
           chromedriver --version
-
-      - name: Verify Chrome and ChromeDriver
-        run: |
-          echo "=== VERIFICACIÓN DE INSTALACIÓN ==="
-          which google-chrome-stable && google-chrome-stable --version || echo "❌ Chrome no encontrado"
-          which chromedriver && chromedriver --version || echo "❌ ChromeDriver no encontrado"
-          
-          timeout 10s google-chrome-stable --headless --no-sandbox --disable-gpu --dump-dom https://example.com > /dev/null 2>&1 && \
-          echo "✅ Chrome funciona correctamente" || \
-          echo "⚠️  Chrome tiene problemas de ejecución"
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install selenium beautifulsoup4 python-dotenv
-          pip list | grep -E "(selenium|beautifulsoup|dotenv)"
 
       - name: Create output directory
         run: |
           mkdir -p "${{ env.OUT_DIR }}"
-          echo "Directorio de salida creado: ${{ env.OUT_DIR }}"
 
       - name: Create .env file from secrets
         run: |
-          # Método más seguro para crear el archivo .env
           {
             echo "FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}"
             echo "FLOW_PASS=${{ secrets.FLOW_PASSRQ }}"
@@ -109,9 +90,7 @@ jobs:
             echo "MAX_SCROLLS=${{ env.MAX_SCROLLS }}"
             echo "SCROLL_WAIT_S=${{ env.SCROLL_WAIT_S }}"
           } > .env
-          
           echo "=== ARCHIVO .env CONFIGURADO ==="
-          # Mostrar .env sin la contraseña
           sed 's/FLOW_PASS=.*/FLOW_PASS=***/' .env
 
       - name: Run EventosProxParticipantesDeep.py scraper
@@ -122,34 +101,21 @@ jobs:
         run: |
           echo "=== INICIANDO SCRAPER ==="
           echo "Script: EventosProxParticipantesDeep.py"
-          echo "Módulo: all"
           echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
-          echo "Timeout máximo: ${{ env.MAX_RUNTIME_MIN }} minutos"
-          echo ""
           
-          # Verificar que el script existe
           if [ ! -f "EventosProxParticipantesDeep.py" ]; then
             echo "❌ ERROR: El archivo EventosProxParticipantesDeep.py no existe"
-            echo "Archivos en el directorio:"
-            ls -la *.py || echo "No hay archivos Python"
+            ls -la *.py
             exit 1
           fi
           
           python EventosProxParticipantesDeep.py --module all
-          
           SCRAPER_EXIT_CODE=$?
           echo "Scraper finalizado con código: $SCRAPER_EXIT_CODE"
-          
-          if [ $SCRAPER_EXIT_CODE -eq 0 ]; then
-            echo "✅ Scraper ejecutado exitosamente"
-          else
-            echo "❌ Scraper falló con código $SCRAPER_EXIT_CODE"
-          fi
 
       - name: Verify generated JSON files
         run: |
           echo "=== VERIFICACIÓN DE ARCHIVOS GENERADOS ==="
-          echo "Contenido del directorio ${{ env.OUT_DIR }}:"
           ls -la "${{ env.OUT_DIR }}" || echo "❌ No se pudo listar el directorio"
           
           REQUIRED_FILES=("01events.json" "02info.json")
@@ -159,23 +125,12 @@ jobs:
             FILE_PATH="${{ env.OUT_DIR }}/$file"
             if [ -f "$FILE_PATH" ]; then
               FILE_SIZE=$(stat -c%s "$FILE_PATH")
-              FILE_LINES=$(wc -l < "$FILE_PATH" 2>/dev/null || echo "N/A")
-              echo "✅ $file - Tamaño: ${FILE_SIZE} bytes, Líneas: ${FILE_LINES}"
+              echo "✅ $file - Tamaño: ${FILE_SIZE} bytes"
             else
               echo "❌ $file - NO ENCONTRADO"
               ALL_FILES_EXIST=false
             fi
-            echo ""
           done
-          
-          DATED_FILES=$(ls "${{ env.OUT_DIR }}"/0*.json 2>/dev/null | wc -l || echo "0")
-          echo "📅 Archivos con fecha encontrados: $DATED_FILES"
-          
-          if [ "$ALL_FILES_EXIST" = true ]; then
-            echo "✅ TODOS los archivos requeridos están presentes"
-          else
-            echo "❌ Faltan algunos archivos requeridos"
-          fi
 
       - name: Analyze JSON content
         run: |
@@ -249,30 +204,19 @@ EOF
       - name: Compress JSON files for backup
         run: |
           echo "=== COMPRIMIENDO ARCHIVOS PARA BACKUP ==="
-          
           for json_file in "${{ env.OUT_DIR }}"/*.json; do
             if [ -f "$json_file" ]; then
               gzip -9 -k "$json_file"
               original_size=$(stat -c%s "$json_file")
               compressed_size=$(stat -c%s "${json_file}.gz")
-              compression_ratio=$((compressed_size * 100 / original_size))
-              echo "✅ $(basename "$json_file"): ${original_size} bytes → ${compressed_size} bytes (${compression_ratio}%)"
+              echo "✅ $(basename "$json_file") comprimido"
             fi
           done
-          
-          echo "Archivos comprimidos:"
-          ls -la "${{ env.OUT_DIR }}"/*.gz 2>/dev/null || echo "No hay archivos comprimidos"
 
-      - name: Create backup directory
+      - name: Create backup and upload artifacts
         run: |
           mkdir -p ./backup
-          echo "Directorio backup creado"
-
-      - name: Backup uncompressed files
-        run: |
-          echo "=== CREANDO BACKUP DE ARCHIVOS SIN COMPRIMIR ==="
           cp -r "${{ env.OUT_DIR }}" ./backup/ || echo "No se pudo crear backup"
-          echo "Backup creado en ./backup/output/"
 
       - name: Upload JSON files as artifact
         uses: actions/upload-artifact@v4
@@ -284,68 +228,9 @@ EOF
           retention-days: 7
           if-no-files-found: warn
 
-      - name: Upload backup as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scraper-backup
-          path: |
-            ./backup/
-          retention-days: 3
-          if-no-files-found: warn
-
       - name: Final summary
         run: |
-          echo "=== RESUMEN FINAL DEL WORKFLOW ==="
-          echo "🎯 Configuración utilizada:"
-          echo "   - Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
-          echo "   - Máximo tiempo ejecución: ${{ env.MAX_RUNTIME_MIN }} minutos"
-          echo "   - Directorio salida: ${{ env.OUT_DIR }}"
-          
-          echo ""
-          echo "📁 Archivos generados:"
-          if [ -d "${{ env.OUT_DIR }}" ]; then
-            for file in "${{ env.OUT_DIR }}"/*; do
-              if [ -f "$file" ]; then
-                size=$(stat -c%s "$file" 2>/dev/null || echo "N/A")
-                echo "   - $(basename "$file"): $size bytes"
-              fi
-            done
-          else
-            echo "   ❌ No se generaron archivos"
-          fi
-          
-          echo ""
-          echo "⏰ Hora de finalización: $(date)"
-          echo "✅ Workflow completado"
-
-      - name: Debug on failure
-        if: failure()
-        run: |
-          echo "=== DEBUGGING POR FALLO ==="
-          echo "❌ El workflow ha fallado"
-          
-          echo ""
-          echo "📋 Información del sistema:"
-          echo "Ubuntu version: $(lsb_release -d || echo 'N/A')"
-          echo "Python version: $(python --version || echo 'N/A')"
-          echo "Chrome version: $(google-chrome-stable --version || echo 'N/A')"
-          echo "ChromeDriver version: $(chromedriver --version || echo 'N/A')"
-          
-          echo ""
-          echo "📁 Estructura de directorios:"
-          echo "Directorio actual:"
-          ls -la
-          echo ""
-          echo "Directorio output:"
-          ls -la "${{ env.OUT_DIR }}" 2>/dev/null || echo "No existe"
-          echo ""
-          echo "Archivos Python:"
-          ls -la *.py 2>/dev/null || echo "No hay archivos Python"
-          
-          echo ""
-          echo "🔍 Contenido de .env:"
-          if [ -f .env ]; then
-            cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/' || echo "No se pudo leer .env"
-          else
-            echo "❌ .env no existe"
-          fi
+          echo "=== RESUMEN FINAL ==="
+          echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
+          echo "Directorios generados:"
+          find . -name "output" -o -name "backup" -type d | head -10
