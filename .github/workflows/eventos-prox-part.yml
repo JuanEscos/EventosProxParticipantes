@@ -38,8 +38,6 @@ jobs:
       SCROLL_WAIT_S: "2.0"
       MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
       MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '15' }}"
-      FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
-      FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
 
     steps:
       - name: Checkout repository
@@ -101,20 +99,26 @@ jobs:
 
       - name: Create .env file from secrets
         run: |
-          cat > .env << EOF
-FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}
-FLOW_PASS=${{ secrets.FLOW_PASSRQ }}
-HEADLESS=${{ env.HEADLESS }}
-INCOGNITO=${{ env.INCOGNITO }}
-OUT_DIR=${{ env.OUT_DIR }}
-MAX_SCROLLS=${{ env.MAX_SCROLLS }}
-SCROLL_WAIT_S=${{ env.SCROLL_WAIT_S }}
-EOF
+          # Método más seguro para crear el archivo .env
+          {
+            echo "FLOW_EMAIL=${{ secrets.FLOW_EMAILRQ }}"
+            echo "FLOW_PASS=${{ secrets.FLOW_PASSRQ }}"
+            echo "HEADLESS=${{ env.HEADLESS }}"
+            echo "INCOGNITO=${{ env.INCOGNITO }}"
+            echo "OUT_DIR=${{ env.OUT_DIR }}"
+            echo "MAX_SCROLLS=${{ env.MAX_SCROLLS }}"
+            echo "SCROLL_WAIT_S=${{ env.SCROLL_WAIT_S }}"
+          } > .env
+          
           echo "=== ARCHIVO .env CONFIGURADO ==="
-          cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/'
+          # Mostrar .env sin la contraseña
+          sed 's/FLOW_PASS=.*/FLOW_PASS=***/' .env
 
       - name: Run EventosProxParticipantesDeep.py scraper
         timeout-minutes: 30
+        env:
+          FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
+          FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
         run: |
           echo "=== INICIANDO SCRAPER ==="
           echo "Script: EventosProxParticipantesDeep.py"
@@ -122,6 +126,14 @@ EOF
           echo "Límite de eventos: ${{ env.MAX_EVENTS_FOR_TESTING }}"
           echo "Timeout máximo: ${{ env.MAX_RUNTIME_MIN }} minutos"
           echo ""
+          
+          # Verificar que el script existe
+          if [ ! -f "EventosProxParticipantesDeep.py" ]; then
+            echo "❌ ERROR: El archivo EventosProxParticipantesDeep.py no existe"
+            echo "Archivos en el directorio:"
+            ls -la *.py || echo "No hay archivos Python"
+            exit 1
+          fi
           
           python EventosProxParticipantesDeep.py --module all
           
@@ -316,6 +328,8 @@ EOF
           echo "📋 Información del sistema:"
           echo "Ubuntu version: $(lsb_release -d || echo 'N/A')"
           echo "Python version: $(python --version || echo 'N/A')"
+          echo "Chrome version: $(google-chrome-stable --version || echo 'N/A')"
+          echo "ChromeDriver version: $(chromedriver --version || echo 'N/A')"
           
           echo ""
           echo "📁 Estructura de directorios:"
@@ -324,3 +338,14 @@ EOF
           echo ""
           echo "Directorio output:"
           ls -la "${{ env.OUT_DIR }}" 2>/dev/null || echo "No existe"
+          echo ""
+          echo "Archivos Python:"
+          ls -la *.py 2>/dev/null || echo "No hay archivos Python"
+          
+          echo ""
+          echo "🔍 Contenido de .env:"
+          if [ -f .env ]; then
+            cat .env | sed 's/FLOW_PASS=.*/FLOW_PASS=***/' || echo "No se pudo leer .env"
+          else
+            echo "❌ .env no existe"
+          fi
