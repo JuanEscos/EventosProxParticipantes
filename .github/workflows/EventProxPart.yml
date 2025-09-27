@@ -41,7 +41,7 @@ jobs:
       
       # 🔧 MODO PRUEBAS - CONFIGURACIÓN OPTIMIZADA
       MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
-      MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '15' }}"
+      MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '60' }}"
 
       # Throttling optimizado para pruebas
       THROTTLE_EVENT_S: "2.0"
@@ -51,8 +51,8 @@ jobs:
       THROTTLE_TOGGLE_MAX_S: "1.5"
 
       # Credenciales (usar Secrets)
-      FLOW_EMAIL: "${{ secrets.FLOW_EMAIL }}"
-      FLOW_PASS: "${{ secrets.FLOW_PASS }}"
+      FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
+      FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
 
     steps:
       - name: Checkout repository
@@ -133,8 +133,8 @@ jobs:
       - name: Run EventosProxParticipantesDeep.py scraper
         timeout-minutes: 30
         env:
-          FLOW_EMAIL: "${{ secrets.FLOW_EMAIL }}"
-          FLOW_PASS: "${{ secrets.FLOW_PASS }}"
+          FLOW_EMAIL: "${{ secrets.FLOW_EMAILRQ }}"
+          FLOW_PASS: "${{ secrets.FLOW_PASSRQ }}"
         run: |
           echo "=== INICIANDO SCRAPER ==="
           echo "Script: EventosProxParticipantesDeep.py"
