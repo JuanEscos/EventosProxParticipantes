@@ -1,0 +1,310 @@
+name: Eventos02_Participantes_FTPv2
+
+on:
+  schedule:
+    - cron: '15 4 * * *'   # 04:15 UTC (ajusta según tu Módulo 1)
+  workflow_dispatch:
+
+jobs:
+  participants:
+    runs-on: ubuntu-22.04
+    env:
+      TZ: Europe/Madrid
+      HEADLESS: "true"
+      OUT_DIR: "./output"
+      PER_EVENT_MAX_S: "180"
+      PER_PAGE_MAX_S: "35"
+      MAX_RUNTIME_MIN: "40"    # tope global; ajusta si quieres
+      LIMIT_EVENTS: "0"        # 0 = procesa todos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install Chrome & Chromedriver
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg unzip ca-certificates curl
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+          echo "Chrome version: $CHROME_VERSION"
+
+          CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+          if wget -q --spider "$CHROMEDRIVER_URL"; then
+            echo "Descargando ChromeDriver ${CHROME_VERSION}"
+            wget -q -O chromedriver.zip "$CHROMEDRIVER_URL"
+            unzip -o chromedriver.zip
+            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+            sudo chmod +x /usr/local/bin/chromedriver
+            rm -rf chromedriver.zip chromedriver-linux64
+          else
+            echo "Fallback: chromium-chromedriver"
+            sudo apt-get install -y chromium-chromedriver
+            sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
+          fi
+
+          which google-chrome-stable
+          which chromedriver
+          google-chrome-stable --version
+          chromedriver --version
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install webdriver-manager || true
+
+      - name: Ensure output dirs
+        run: |
+          mkdir -p "${OUT_DIR}"
+          mkdir -p "${OUT_DIR}/participants"
+
+name: Eventos02_Participantes_FTP
+
+on:
+  schedule:
+    - cron: '15 4 * * *'   # 04:15 UTC (ajusta según tu Módulo 1)
+  workflow_dispatch:
+
+jobs:
+  participants:
+    runs-on: ubuntu-22.04
+    env:
+      TZ: Europe/Madrid
+      HEADLESS: "true"
+      OUT_DIR: "./output"
+      PER_EVENT_MAX_S: "180"
+      PER_PAGE_MAX_S: "35"
+      MAX_RUNTIME_MIN: "40"    # tope global; ajusta si quieres
+      LIMIT_EVENTS: "0"        # 0 = procesa todos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install Chrome & Chromedriver
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg unzip ca-certificates curl
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+          echo "Chrome version: $CHROME_VERSION"
+
+          CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+          if wget -q --spider "$CHROMEDRIVER_URL"; then
+            echo "Descargando ChromeDriver ${CHROME_VERSION}"
+            wget -q -O chromedriver.zip "$CHROMEDRIVER_URL"
+            unzip -o chromedriver.zip
+            sudo mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+            sudo chmod +x /usr/local/bin/chromedriver
+            rm -rf chromedriver.zip chromedriver-linux64
+          else
+            echo "Fallback: chromium-chromedriver"
+            sudo apt-get install -y chromium-chromedriver
+            sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
+          fi
+
+          which google-chrome-stable
+          which chromedriver
+          google-chrome-stable --version
+          chromedriver --version
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install webdriver-manager || true
+
+      - name: Ensure output dirs
+        run: |
+          mkdir -p "${OUT_DIR}"
+          mkdir -p "${OUT_DIR}/participants"
+
+      - name: Check 01events presence
+        run: |
+          if [ ! -f "./output/01events.json" ]; then
+            echo "❌ Falta ./output/01events.json (ejecuta antes el Módulo 1)"
+            exit 1
+          fi
+          ls -la ./output/01events.json
+
+      - name: Run participants scraper (Módulo 2)
+        timeout-minutes: 90
+        env:
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASS }}
+        run: |
+          echo "=== EXTRAER PARTICIPANTES ==="
+          python ./flow_participants.py
+          echo "=== FIN EXTRAER PARTICIPANTES ==="
+          ls -la "${OUT_DIR}"
+          ls -la "${OUT_DIR}/participants" || true
+
+      - name: Verify generated files
+        run: |
+          if [ -f "./output/02participants.json" ]; then
+            echo "✅ 02participants.json OK"
+          else
+            echo "❌ 02participants.json NO encontrado"
+            exit 1
+          fi
+
+      - name: Compress outputs (aggregated + per-event)
+        run: |
+          set -e
+          gzip -9 -c "./output/02participants.json" > "./output/02participants.json.gz"
+          # Comprimir todos los per-event
+          shopt -s nullglob
+          for f in ./output/participants/02p_*.json; do
+            gzip -9 -c "$f" > "${f}.gz"
+          done
+          echo "Listando gz:"
+          ls -la ./output/*.gz || true
+          ls -la ./output/participants/*.gz || true
+
+      - name: Upload to FTP (aggregated + per-event)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          set -e
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "❌ Variables FTP no configuradas"; exit 1
+          fi
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Destino FTP: ${BASE_URL}"
+
+          # Subir agregado .gz y copia sin comprimir
+          curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               --upload-file "./output/02participants.json.gz" \
+               "${BASE_URL}/02participants.json.gz" && echo "✅ up 02participants.json.gz"
+
+          curl --fail --ssl-reqd \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               --upload-file "./output/02participants.json" \
+               "${BASE_URL}/02participants.json" && echo "✅ up 02participants.json"
+
+          # Subir todos los per-event comprimidos
+          shopt -s nullglob
+          for f in ./output/participants/02p_*.json.gz; do
+            base=$(basename "$f")
+            curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "$f" \
+                 "${BASE_URL}/participants/${base}" && echo "✅ up ${base}" || echo "⚠️ fallo ${base}"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: participantes-json
+          path: |
+            ./output/02participants.json
+            ./output/02participants.json.gz
+            ./output/participants/*.json
+            ./output/participants/*.json.gz
+          retention-days: 7
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          echo "=== DEBUG ==="
+          ls -la ./output/ || true
+          ls -la ./output/participants/ || true
+          which google-chrome-stable && google-chrome-stable --version || true
+          which chromedriver && chromedriver --version || true
+
+      - name: Compress outputs (aggregated + per-event)
+        run: |
+          set -e
+          gzip -9 -c "./output/02participants.json" > "./output/02participants.json.gz"
+          # Comprimir todos los per-event
+          shopt -s nullglob
+          for f in ./output/participants/02p_*.json; do
+            gzip -9 -c "$f" > "${f}.gz"
+          done
+          echo "Listando gz:"
+          ls -la ./output/*.gz || true
+          ls -la ./output/participants/*.gz || true
+
+      - name: Upload to FTP (aggregated + per-event)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          set -e
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "❌ Variables FTP no configuradas"; exit 1
+          fi
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Destino FTP: ${BASE_URL}"
+
+          # Subir agregado .gz y copia sin comprimir
+          curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               --upload-file "./output/02participants.json.gz" \
+               "${BASE_URL}/02participants.json.gz" && echo "✅ up 02participants.json.gz"
+
+          curl --fail --ssl-reqd \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               --upload-file "./output/02participants.json" \
+               "${BASE_URL}/02participants.json" && echo "✅ up 02participants.json"
+
+          # Subir todos los per-event comprimidos
+          shopt -s nullglob
+          for f in ./output/participants/02p_*.json.gz; do
+            base=$(basename "$f")
+            curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+                 --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                 --upload-file "$f" \
+                 "${BASE_URL}/participants/${base}" && echo "✅ up ${base}" || echo "⚠️ fallo ${base}"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: participantes-json
+          path: |
+            ./output/02participants.json
+            ./output/02participants.json.gz
+            ./output/participants/*.json
+            ./output/participants/*.json.gz
+          retention-days: 7
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          echo "=== DEBUG ==="
+          ls -la ./output/ || true
+          ls -la ./output/participants/ || true
+          which google-chrome-stable && google-chrome-stable --version || true
+          which chromedriver && chromedriver --version || true
