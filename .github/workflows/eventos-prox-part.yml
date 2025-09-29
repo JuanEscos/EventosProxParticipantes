@@ -79,23 +79,6 @@ jobs:
           sudo apt-get install -y google-chrome-stable
           google-chrome --version
 
-      - name: Install matching ChromeDriver
-        run: |
-          # Detectar versión mayor.minor.build de Chrome
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+' | cut -d. -f1-3)
-          echo "Chrome base version: $CHROME_VERSION"
-
-          # Obtener la versión de ChromeDriver compatible
-          CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}")
-          echo "Matching ChromeDriver: $CHROMEDRIVER_VERSION"
-
-          wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-          unzip -q chromedriver_linux64.zip
-          sudo mv chromedriver /usr/local/bin/
-          sudo chmod +x /usr/local/bin/chromedriver
-          rm chromedriver_linux64.zip
-          chromedriver --version
-
       - name: Verify Chrome and ChromeDriver
         run: |
           echo "=== VERIFICACIÓN DE INSTALACIÓN ==="
