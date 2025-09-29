@@ -114,8 +114,8 @@ jobs:
       - name: Run participants scraper (Módulo 2)
         timeout-minutes: 90
         env:
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRC }}
-          FLOW_PASS:  ${{ secrets.FLOW_PASSRC }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== EXTRAER PARTICIPANTES ==="
           python ./flow_participants.py
