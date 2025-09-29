@@ -77,8 +77,8 @@ jobs:
         HEADLESS: "true"
         MAX_SCROLLS: "12"
         SCROLL_WAIT_S: "2.0"
-        FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
-        FLOW_PASS:  ${{ secrets.FLOW_PASS }}
+        FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+        FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
       run: |
         echo "=== EJECUTANDO SCRAPER 01events ==="
         python ./flow_events.py
