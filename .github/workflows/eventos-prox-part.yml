@@ -197,11 +197,9 @@ jobs:
         run: |
           echo "=== ANÁLISIS DE CONTENIDO JSON ==="
 
-          # Analizar 01events.json
-          if [ -f "${{ env.OUT_DIR }}/01events.json" ]; then
-            echo "📊 Análisis de 01events.json:"
-            python - <<'PY'
-import json, os
+          # --- Script para 01events.json ---
+          cat > /tmp/analyze_events.py << 'PY'
+import json, os, sys
 out_dir = os.environ.get("OUT_DIR", "./output")
 path = os.path.join(out_dir, "01events.json")
 try:
@@ -213,38 +211,47 @@ try:
         print(f"     ID: {event.get('id', 'N/A')}")
         enlaces = event.get("enlaces", {})
         print(f"     Enlace participantes: {enlaces.get('participantes', 'N/A')}")
+except FileNotFoundError:
+    print(f"   01events.json no existe en {path}")
 except Exception as e:
     print(f"   Error analizando 01events.json: {e}")
 PY
-          fi
 
-          # Analizar 02info.json
-          if [ -f "${{ env.OUT_DIR }}/02info.json" ]; then
-            echo ""
-            echo "📊 Análisis de 02info.json:"
-            python - <<'PY'
-import json, os
+          # --- Script para 02info.json ---
+          cat > /tmp/analyze_info.py << 'PY'
+import json, os, sys
 out_dir = os.environ.get("OUT_DIR", "./output")
 path = os.path.join(out_dir, "02info.json")
 try:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
     print(f"   Número de eventos procesados: {len(data)}")
     events_with_participants = [e for e in data if e.get("numero_participantes", 0) > 0]
     total_participants = sum(e.get("numero_participantes", 0) for e in data)
-
     print(f"   Eventos con participantes: {len(events_with_participants)}")
     print(f"   Total participantes: {total_participants}")
-
     if events_with_participants:
         print("   Eventos con más participantes:")
         for event in sorted(events_with_participants, key=lambda x: x.get("numero_participantes", 0), reverse=True)[:3]:
             print(f"     - {event.get('nombre', 'N/A')}: {event.get('numero_participantes')} participantes")
+except FileNotFoundError:
+    print(f"   02info.json no existe en {path}")
 except Exception as e:
     print(f"   Error analizando 02info.json: {e}")
 PY
+
+          # Ejecutar análisis si existen los archivos
+          if [ -f "${{ env.OUT_DIR }}/01events.json" ]; then
+            echo "📊 Análisis de 01events.json:"
+            python /tmp/analyze_events.py
           fi
+
+          if [ -f "${{ env.OUT_DIR }}/02info.json" ]; then
+            echo ""
+            echo "📊 Análisis de 02info.json:"
+            python /tmp/analyze_info.py
+          fi
+
 
       - name: Compress JSON files for backup
         run: |
