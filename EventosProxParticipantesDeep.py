@@ -120,7 +120,15 @@ try:
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.common.exceptions import TimeoutException, NoSuchElementException
     from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+      opts = Options()
+      opts.add_argument("--headless=new")
+      opts.add_argument("--no-sandbox")
+      opts.add_argument("--disable-gpu")
     HAS_SELENIUM = True
+
+driver = webdriver.Chrome(options=opts)  # Selenium Manager resuelve el driver
+
 except ImportError as e:
     print(f"❌ Error importando Selenium: {e}")
     HAS_SELENIUM = False
