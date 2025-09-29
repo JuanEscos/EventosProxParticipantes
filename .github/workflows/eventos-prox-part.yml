@@ -38,7 +38,7 @@ jobs:
       OUT_DIR: "./output"
       MAX_SCROLLS: "8"
       SCROLL_WAIT_S: "2.0"
-      
+
       # 🔧 MODO PRUEBAS - CONFIGURACIÓN OPTIMIZADA
       MAX_EVENTS_FOR_TESTING: "${{ github.event.inputs.limit_events || '2' }}"
       MAX_RUNTIME_MIN: "${{ github.event.inputs.max_runtime_min || '60' }}"
@@ -244,42 +244,6 @@ jobs:
                           print(f"     - {event.get('nombre','N/A')}: {event.get('numero_participantes')} participantes")
               except Exception as e:
                   print(f"   Error analizando 02info.json: {e}")
-PY
-      # --- Script para 02info.json ---
-          cat > /tmp/analyze_info.py << 'PY'
-import json, os, sys
-out_dir = os.environ.get("OUT_DIR", "./output")
-path = os.path.join(out_dir, "02info.json")
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    print(f"   Número de eventos procesados: {len(data)}")
-    events_with_participants = [e for e in data if e.get("numero_participantes", 0) > 0]
-    total_participants = sum(e.get("numero_participantes", 0) for e in data)
-    print(f"   Eventos con participantes: {len(events_with_participants)}")
-    print(f"   Total participantes: {total_participants}")
-    if events_with_participants:
-        print("   Eventos con más participantes:")
-        for event in sorted(events_with_participants, key=lambda x: x.get("numero_participantes", 0), reverse=True)[:3]:
-            print(f"     - {event.get('nombre', 'N/A')}: {event.get('numero_participantes')} participantes")
-except FileNotFoundError:
-    print(f"   02info.json no existe en {path}")
-except Exception as e:
-    print(f"   Error analizando 02info.json: {e}")
-PY
-
-          # Ejecutar análisis si existen los archivos
-          if [ -f "${{ env.OUT_DIR }}/01events.json" ]; then
-            echo "📊 Análisis de 01events.json:"
-            python /tmp/analyze_events.py
-          fi
-
-          if [ -f "${{ env.OUT_DIR }}/02info.json" ]; then
-            echo ""
-            echo "📊 Análisis de 02info.json:"
-            python /tmp/analyze_info.py
-          fi
-
 
       - name: Compress JSON files for backup
         run: |
@@ -358,7 +322,7 @@ PY
                 echo "   - $(basename "$file"): $size bytes"
               fi
             done
-          else
+          else:
             echo "   ❌ No se generaron archivos"
           fi
 
