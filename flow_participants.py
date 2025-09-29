@@ -59,8 +59,8 @@ try:
 except Exception:
     pass
 
-FLOW_EMAIL = os.getenv("FLOW_EMAILRC", "")
-FLOW_PASS  = os.getenv("FLOW_PASSRC",  "")
+FLOW_EMAIL = os.getenv("FLOW_EMAILRQ", "")
+FLOW_PASS  = os.getenv("FLOW_PASSRQ",  "")
 
 HEADLESS          = os.getenv("HEADLESS", "true").lower() == "true"
 INCOGNITO         = os.getenv("INCOGNITO", "true").lower() == "true"
