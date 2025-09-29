@@ -406,8 +406,6 @@ for idx, t in enumerate(toggles, 1):
     _click_safely(driver, t)
     sleep(0.15, 0.30)
 
-    return out
-
 def main():
     print("🚀 MÓDULO 2: PARTICIPANTES (DETALLE)")
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
