@@ -159,30 +159,72 @@ ALIASES = {
     "club":"club","licencia":"licencia","federación":"federacion","federacion":"federacion",
 }
 
-def _parse_open_blocks(soup):
-    """Devuelve lista de bloques 'Open X' con Fecha y Mangas."""
-    out = []
-    # Cualquier div que empiece por 'Open ' y sea título de bloque
-    for h in soup.find_all("div", class_=re.compile(r"\bfont-bold\b")):
+def _parse_open_blocks(panel_soup):
+    blocks = []
+    # títulos "Open ..." dentro del mismo panel
+    for h in panel_soup.find_all("div", class_=re.compile(r"\bfont-bold\b.*\btext-sm\b")):
         title = _clean(h.get_text())
-        if title.lower().startswith("open "):
-            block = {"titulo": title, "fecha":"", "mangas":""}
-            # buscar parejas label/valor posteriores inmediatas
-            cur = h
-            # recoge las dos siguientes parejas "Fecha"/valor y "Mangas"/valor
-            pairs = []
-            # Busca en los siguientes siblings inmediatos hasta otro título o fin
-            sib = h.find_next_siblings("div", limit=6)  # suele estar cerca
-            for i in range(0, len(sib)-1, 2):
-                lab = _clean(sib[i].get_text())
-                val = _clean(sib[i+1].get_text())
-                if lab.lower() in ("fecha","mangas"):
-                    pairs.append((lab,val))
-            for lab,val in pairs:
-                if lab.lower()=="fecha":  block["fecha"]=val
-                if lab.lower()=="mangas": block["mangas"]=val
-            out.append(block)
-    return out
+        if not title.lower().startswith("open "):
+            continue
+        block = {"titulo": title, "fecha": "", "mangas": ""}
+
+        # recorrer hermanos siguientes hasta otro título de bloque o fin
+        for sib in h.find_next_siblings("div"):
+            txt = _clean(sib.get_text())
+            cls = " ".join(sib.get("class", []))
+            # si aparece otro título fuerte, cortamos el bloque
+            if re.search(r"\bfont-bold\b.*\btext-sm\b", cls) and "open" in txt.lower():
+                break
+            if txt.lower() == "fecha":
+                val = sib.find_next_sibling("div")
+                block["fecha"] = _clean(val.get_text()) if val else ""
+            if txt.lower() == "mangas":
+                val = sib.find_next_sibling("div")
+                block["mangas"] = _clean(val.get_text()) if val else ""
+        blocks.append(block)
+    return blocks
+
+def _parse_panel_html(panel_html):
+    """Recibe el outerHTML del panel .grid.grid-cols-2 y devuelve dict normalizado."""
+    soup = BeautifulSoup(panel_html, "html.parser")
+    data = {}
+
+    # 1) pares etiqueta/valor clásicos
+    for lab in soup.select("div.text-gray-500.text-sm"):
+        label = _clean(lab.get_text()).lower()
+        val_div = lab.find_next_sibling("div")
+        value = _clean(val_div.get_text()) if val_div else ""
+        key = ALIASES.get(label)
+        if key and value:
+            data[key] = value
+
+    # 2) bloques Open ...
+    data["open_blocks"] = _parse_open_blocks(soup)
+    return data
+
+def _wait_panel_and_parse(driver):
+    """
+    Tras hacer click en un participante, espera el ÚLTIMO panel con 'Binomio'
+    y lo parsea con _parse_panel_html.
+    """
+    try:
+        # espera a que exista al menos un panel con "Binomio"
+        WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(@class,'grid') and contains(@class,'grid-cols-2')][.//div[contains(normalize-space(.),'Binomio')]]")
+            )
+        )
+        panels = driver.find_elements(
+            By.XPATH, "//div[contains(@class,'grid') and contains(@class,'grid-cols-2')][.//div[contains(normalize-space(.),'Binomio')]]"
+        )
+        if not panels:
+            return {}
+
+        panel = panels[-1]  # el más reciente/abajo
+        html = panel.get_attribute("outerHTML")
+        return _parse_panel_html(html)
+    except Exception:
+        return {}
 
 def _extract_label_value_pairs(grid_div):
     """Del panel .grid.grid-cols-2 extrae dict con claves normalizadas."""
@@ -324,10 +366,11 @@ def extract_event_participants(driver, event, per_event_deadline):
         if not ok:
             continue
         # esperar y parsear panel
+        sleep(0.15, 0.30)  # dar tiempo a hidratar contenido
         data = _wait_panel_and_parse(driver)
         if not data:
             continue
-
+     
         # normalizaciones
         p = {
             "event_id": eid,
