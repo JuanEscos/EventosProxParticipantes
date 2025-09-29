@@ -70,13 +70,53 @@ jobs:
           mkdir -p "${OUT_DIR}"
           mkdir -p "${OUT_DIR}/participants"
 
-      - name: Check 01events presence
-        run: |
-          if [ ! -f "./output/01events.json" ]; then
-            echo "❌ Falta ./output/01events.json (ejecuta antes el Módulo 1)"
-            exit 1
-          fi
+    - name: Ensure 01events.json (pull from FTP or generate)
+      env:
+        FTP_SERVER: ${{ secrets.FTP_SERVER }}
+        FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+        FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        TZ: Europe/Madrid
+        HEADLESS: "true"
+        MAX_SCROLLS: "12"
+        SCROLL_WAIT_S: "2.0"
+        LIMIT_EVENTS: "2"          # <- tu límite a 2 eventos
+      run: |
+        set -e
+        mkdir -p ./output
+
+        # 1) Si ya está, úsalo
+        if [ -f "./output/01events.json" ]; then
+          echo "✅ Ya existe ./output/01events.json"
           ls -la ./output/01events.json
+          exit 0
+        fi
+
+        # 2) Intentar descargar del FTP (lo sube el Módulo 1)
+        if [ -n "$FTP_SERVER" ] && [ -n "$FTP_USERNAME" ] && [ -n "$FTP_PASSWORD" ]; then
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "🔽 Intentando descargar 01events.json desde ${BASE_URL}"
+          curl --fail --ssl-reqd \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               -o "./output/01events.json" \
+               "${BASE_URL}/01events.json" && echo "✅ Descargado 01events.json desde FTP" || echo "⚠️ No se pudo descargar de FTP"
+        fi
+
+        # 3) Si sigue sin existir, generarlo ejecutando el Módulo 1 localmente
+        if [ ! -f "./output/01events.json" ]; then
+          echo "⚙️  Generando 01events.json ejecutando flow_events.py (Módulo 1)"
+          python ./flow_events.py || true
+        fi
+
+        # 4) Verificación final
+        if [ -f "./output/01events.json" ]; then
+          echo "✅ 01events.json preparado"
+          ls -la ./output/01events.json
+        else
+          echo "❌ Falta ./output/01events.json (ni FTP ni generación local)"
+          exit 1
+        fi
 
       - name: Run participants scraper (Módulo 2)
         timeout-minutes: 90
