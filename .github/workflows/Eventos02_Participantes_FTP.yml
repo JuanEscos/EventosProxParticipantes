@@ -15,7 +15,7 @@ jobs:
       PER_EVENT_MAX_S: "180"
       PER_PAGE_MAX_S: "35"
       MAX_RUNTIME_MIN: "40"    # tope global; ajusta si quieres
-      LIMIT_EVENTS: "0"        # 0 = procesa todos
+      LIMIT_EVENTS: "2"        # 0 = procesa todos
 
     steps:
       - name: Checkout code
