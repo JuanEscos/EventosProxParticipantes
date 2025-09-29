@@ -357,41 +357,54 @@ def extract_event_participants(driver, event, per_event_deadline):
         out["estado"]="empty"
         return out
 
-    # recorre cada participante
-    for idx, t in enumerate(toggles, 1):
-        if _left(per_event_deadline) <= 0: 
-            out["estado"]="timeout"; break
+# recorre cada participante
+for idx, t in enumerate(toggles, 1):
+    if _left(per_event_deadline) <= 0:
+        out["estado"] = "timeout"
+        break
 
-        ok = _click_safely(driver, t)
-        if not ok:
-            continue
-        # esperar y parsear panel
-        sleep(0.15, 0.30)  # dar tiempo a hidratar contenido
+    ok = _click_safely(driver, t)
+    if not ok:
+        continue
+
+    # --- abrir y dar un pequeño margen al LiveView ---
+    sleep(0.15, 0.30)
+
+    # 1ª pasada de parseo
+    data = _wait_panel_and_parse(driver)
+
+    # ⬇️ AQUI va tu fallback de segunda pasada:
+    if not data or (not data.get("dorsal") and not data.get("guia") and not data.get("perro")):
+        sleep(0.3, 0.5)             # pequeño extra-wait
         data = _wait_panel_and_parse(driver)
-        if not data:
-            continue
-     
-        # normalizaciones
-        p = {
-            "event_id": eid,
-            "event_name": ename,
-            "dorsal": data.get("dorsal",""),
-            "guia": data.get("guia",""),
-            "perro": data.get("perro",""),
-            "raza": data.get("raza",""),
-            "edad_meses": _parse_age_meses(data.get("edad","")),
-            "genero": data.get("genero",""),
-            "altura_cm": _parse_altura_cm(data.get("altura_cm","")),
-            "club": data.get("club",""),
-            "licencia": data.get("licencia",""),
-            "federacion": data.get("federacion",""),
-            "open_blocks": data.get("open_blocks", []),
-        }
-        out["participants"].append(p)
-        out["participants_count"] = len(out["participants"])
-        # cerrar el panel (otro click) para no acumular demasiados
+
+    if not data:
+        # cerrar y seguir con el siguiente
         _click_safely(driver, t)
-        sleep(0.15,0.30)
+        continue
+
+    # normalizaciones / construcción del objeto participante
+    p = {
+        "event_id": eid,
+        "event_name": ename,
+        "dorsal": data.get("dorsal", ""),
+        "guia": data.get("guia", ""),
+        "perro": data.get("perro", ""),
+        "raza": data.get("raza", ""),
+        "edad_meses": _parse_age_meses(data.get("edad", "")),
+        "genero": data.get("genero", ""),
+        "altura_cm": _parse_altura_cm(data.get("altura_cm", "")),
+        "club": data.get("club", ""),
+        "licencia": data.get("licencia", ""),
+        "federacion": data.get("federacion", ""),
+        "open_blocks": data.get("open_blocks", []),
+    }
+    out["participants"].append(p)
+    out["participants_count"] = len(out["participants"])
+
+    # cerrar el panel para que el "último grid" siga siendo el correcto
+    _click_safely(driver, t)
+    sleep(0.15, 0.30)
 
     return out
 
