@@ -244,10 +244,8 @@ jobs:
                           print(f"     - {event.get('nombre','N/A')}: {event.get('numero_participantes')} participantes")
               except Exception as e:
                   print(f"   Error analizando 02info.json: {e}")
-
 PY
-
-          # --- Script para 02info.json ---
+      # --- Script para 02info.json ---
           cat > /tmp/analyze_info.py << 'PY'
 import json, os, sys
 out_dir = os.environ.get("OUT_DIR", "./output")
