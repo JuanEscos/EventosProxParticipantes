@@ -118,7 +118,7 @@ jobs:
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== EXTRAER PARTICIPANTES ==="
-          python ./flow_participants.py
+          python ./flow_participantsScrapy.py
           echo "=== FIN EXTRAER PARTICIPANTES ==="
           ls -la "${OUT_DIR}" || true
           ls -la "${OUT_DIR}/participants" || true
