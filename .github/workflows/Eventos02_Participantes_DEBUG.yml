@@ -72,8 +72,8 @@ jobs:
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
-          FLOW_PASS: ${{ secrets.FLOW_PASS }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS: ${{ secrets.FLOW_PASSRQ }}
           HEADLESS: "true"
           MAX_SCROLLS: "12"
           SCROLL_WAIT_S: "2.0"
@@ -103,8 +103,8 @@ jobs:
         timeout-minutes: 90
         shell: bash
         env:
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
-          FLOW_PASS:  ${{ secrets.FLOW_PASS }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== EXTRAER PARTICIPANTES (DEBUG) ==="
           python ./flow_participants_debug.py
