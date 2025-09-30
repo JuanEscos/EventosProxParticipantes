@@ -1,7 +1,7 @@
 name: Eventos02_Participantes_DEBUG
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch  # Permitir ejecución manual
 
 jobs:
   participants_debug:
