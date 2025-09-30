@@ -2,15 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-FLOWAGILITY SCRAPER - MÓDULO 2 (DEBUG v3 PID): PARTICIPANTES DETALLADOS
+FLOWAGILITY SCRAPER - MÓDULO 2 (DEBUG v4 PID): PARTICIPANTES DETALLADOS
 - Lee ./output/01events.json
-- Abre participants_list, detecta booking_id (PID), click por PID.
-- Mapea panel con combinación: JS (con labels ES/EN) + BeautifulSoup (hermano fuerte) + fallback XPATH.
+- Para cada evento abre participants_list, detecta booking_id (PID),
+  abre el panel (sin colapsar el primero si ya está abierto) y mapea campos.
+- Mapeo híbrido: JS (ES/EN) + BeautifulSoup (hermano fuerte) + fallback XPATH.
 - Salidas:
   * ./output/02participants.json
   * ./output/02participants_debug.json (si DEBUG_PARTICIPANTS=1)
   * ./output/participants/02p_<event_id>.json (por evento)
-  * ./output/participants/raw_<event_id>.html (dump página si no hay toggles)
+  * ./output/participants/raw_<event_id>.html (dump si no hay toggles)
 """
 
 import os
@@ -62,7 +63,7 @@ PER_EVENT_MAX_S = int(os.getenv("PER_EVENT_MAX_S", "240"))
 MAX_RUNTIME_MIN = int(os.getenv("MAX_RUNTIME_MIN", "0"))
 DEBUG_PARTICIPANTS = os.getenv("DEBUG_PARTICIPANTS", "0") == "1"
 
-# Etiquetas → claves canónicas (incluye ES + EN)
+# Etiquetas → claves canónicas (ES + EN)
 ALIASES = {
     # ES
     "dorsal":"dorsal","guía":"guia","guia":"guia","perro":"perro","raza":"raza",
@@ -215,7 +216,7 @@ let tmpMangas = null;
 const fields = {};
 const schedule = [];
 
-// Etiquetas ES + EN
+// Etiquetas ES + EN (incluye Fecha/Date y Mangas/Runs para schedule)
 const simpleFieldLabels = new Set([
   "Dorsal","Guía","Guia","Handler",
   "Perro","Dog",
@@ -228,7 +229,8 @@ const simpleFieldLabels = new Set([
   "Licencia","License number",
   "Equipo","Team",
   "Club",
-  "Federación","Federacion","Federation"
+  "Federación","Federacion","Federation",
+  "Fecha","Date","Mangas","Runs"
 ]);
 
 while (node){
@@ -240,8 +242,8 @@ while (node){
     const value = txt(valueEl) || "";
 
     const l = label.toLowerCase();
-    if (l.startsWith("fecha"))       { tmpFecha  = value; }
-    else if (l.startsWith("mangas")) { tmpMangas = value; }
+    if (l.startsWith("fecha") || l === "date")       { tmpFecha  = value; }
+    else if (l.startsWith("mangas") || l === "runs") { tmpMangas = value; }
     else if (simpleFieldLabels.has(label) && value && (fields[label] == null || fields[label] === "")) {
       fields[label] = value;
     }
@@ -256,7 +258,7 @@ while (node){
 return { fields, schedule };
 """
 
-# ===================== Helpers PID & click =====================
+# ===================== Helpers PID & apertura segura =====================
 
 def _collect_booking_ids(driver):
     """Devuelve lista de booking_id únicos presentes en la página."""
@@ -275,19 +277,43 @@ def _collect_booking_ids(driver):
             seen.add(x); out.append(x)
     return out
 
-def _click_toggle_by_pid(driver, pid):
+def _get_or_open_panel_by_pid(driver, pid):
+    """
+    Devuelve el elemento del panel de detalles para 'pid'.
+    Si ya está abierto y pintado, NO hace click; si no, click + espera de render.
+    """
+    def panel_ready(el):
+        try:
+            strongs = el.find_elements(By.XPATH, ".//div[contains(@class,'font-bold') and contains(@class,'text-sm')]")
+            grids   = el.find_elements(By.XPATH, ".//div[contains(@class,'grid') and contains(@class,'grid-cols-2')]")
+            return bool(strongs or grids)
+        except Exception:
+            return False
+
+    # 1) ¿ya existe el bloque?
+    try:
+        el = driver.find_element(By.ID, pid)
+        if panel_ready(el):
+            return el
+    except Exception:
+        el = None
+
+    # 2) no existe/está vacío → click en toggle
     sel = f"[phx-click='booking_details_show'][phx-value-booking_id='{pid}']"
     for _ in range(6):
         try:
             btn = driver.find_element(By.CSS_SELECTOR, sel)
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-            driver.execute_script("arguments[0].click();", btn)  # JS click para evitar overlays
-            WebDriverWait(driver, 8).until(lambda d: d.find_element(By.ID, pid))
-            return driver.find_element(By.ID, pid)
+            driver.execute_script("arguments[0].click();", btn)  # JS click
+            WebDriverWait(driver, 6).until(lambda d: d.find_element(By.ID, pid))
+            el = driver.find_element(By.ID, pid)
+            t0 = time.time()
+            while time.time() - t0 < 3:
+                if panel_ready(el): return el
+                time.sleep(0.15)
+            driver.execute_script("window.scrollBy(0, 160);")
         except (StaleElementReferenceException, NoSuchElementException, ElementClickInterceptedException, TimeoutException):
-            sleep(0.2, 0.5)
-            try: driver.execute_script("window.scrollBy(0, 160);")
-            except Exception: pass
+            time.sleep(0.2)
             continue
     return None
 
@@ -296,8 +322,8 @@ def _click_toggle_by_pid(driver, pid):
 def _parse_panel_html(panel_html):
     """
     Empareja cada etiqueta (div.text-gray-500.text-sm) con su siguiente hermano
-    fuerte (div.font-bold.text-sm). Además detecta bloques "Open ..." y sus
-    campos Fecha/Mangas. Devuelve claves canónicas según ALIASES.
+    fuerte (div.font-bold.text-sm). Detecta "Open ..." y Fecha/Date + Mangas/Runs.
+    Devuelve claves canónicas según ALIASES.
     """
     soup = BeautifulSoup(panel_html, "html.parser")
 
@@ -317,31 +343,32 @@ def _parse_panel_html(panel_html):
         if label and val and label not in fields_raw:
             fields_raw[label] = val
 
-    # 2) Bloques "Open ..."
+    # 2) Bloques "Open ..." y Fecha/Date + Mangas/Runs
     open_blocks = []
-    for h in soup.find_all("div", class_=lambda c: c and "font-bold" in c.split() and "text-sm" in c.split()):
+    headers = soup.find_all("div", class_=lambda c: c and "font-bold" in c.split() and "text-sm" in c.split())
+    for h in headers:
         title = _clean(h.get_text())
         if not title.lower().startswith("open "):
             continue
         block = {"titulo": title, "fecha": "", "mangas": ""}
         cur = h
-        for _ in range(12):
+        for _ in range(16):
             cur = cur.find_next_sibling("div")
             if not cur: break
             txt = _clean(cur.get_text())
             classes = cur.get("class") or []
-            # si aparece otro header Open ..., paramos
             if "font-bold" in classes and "text-sm" in classes and txt.lower().startswith("open "):
                 break
-            if txt.lower() == "fecha":
+            tl = txt.lower()
+            if tl == "fecha" or tl == "date":
                 val = cur.find_next_sibling("div")
                 block["fecha"] = _clean(val.get_text()) if val else ""
-            elif txt.lower() == "mangas":
+            elif tl == "mangas" or tl == "runs":
                 val = cur.find_next_sibling("div")
                 block["mangas"] = _clean(val.get_text()) if val else ""
         open_blocks.append(block)
 
-    # 3) Normaliza claves según ALIASES (ES+EN)
+    # 3) Normaliza (ES + EN)
     out = {}
     for k, v in fields_raw.items():
         kk = _clean(k).lower()
@@ -385,10 +412,10 @@ def _fallback_map_participant(driver, pid):
             if not t.lower().startswith("open "): 
                 continue
             fecha = h.find_elements(
-                By.XPATH, "following-sibling::div[normalize-space()='Fecha']/following-sibling::div[contains(@class,'font-bold')][1]"
+                By.XPATH, "following-sibling::div[normalize-space()='Fecha' or normalize-space()='Date']/following-sibling::div[contains(@class,'font-bold')][1]"
             )
             mangas = h.find_elements(
-                By.XPATH, "following-sibling::div[normalize-space()='Mangas']/following-sibling::div[contains(@class,'font-bold')][1]"
+                By.XPATH, "following-sibling::div[normalize-space()='Mangas' or normalize-space()='Runs']/following-sibling::div[contains(@class,'font-bold')][1]"
             )
             schedule.append({
                 "day": t,
@@ -407,7 +434,6 @@ def _parse_altura_cm(s):
     return float(m.group(1)) if m else None
 
 def _to_canonical_from_jsfields(js_fields):
-    """Convierte labels 'humanos' del JS a claves canónicas (ALIASES)."""
     out = {}
     for k, v in (js_fields or {}).items():
         kk = _clean(k).lower()
@@ -522,8 +548,8 @@ def extract_event_participants(driver, event, per_event_deadline):
         if _left(per_event_deadline) <= 0:
             out["estado"] = "timeout"; break
 
-        # Click para desplegar bloque
-        block_el = _click_toggle_by_pid(driver, pid)
+        # Abrir (o reutilizar) el panel del participante
+        block_el = _get_or_open_panel_by_pid(driver, pid)
         if not block_el:
             continue
 
@@ -554,13 +580,7 @@ def extract_event_participants(driver, event, per_event_deadline):
         out["participants"].append(part)
         out["participants_count"] = len(out["participants"])
 
-        # Cierra bloque (click de nuevo)
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", block_el)
-            driver.execute_script("arguments[0].click();", block_el)
-        except Exception:
-            try: _click_toggle_by_pid(driver, pid)
-            except Exception: pass
+        # 👇 No cerramos el bloque (evita “salto” o registros vacíos)
 
         sleep(0.10, 0.20)
 
@@ -569,7 +589,7 @@ def extract_event_participants(driver, event, per_event_deadline):
 # ===================== MAIN =====================
 
 def main():
-    print("🚀 MÓDULO 2 (DEBUG v3 PID): PARTICIPANTES DETALLADOS")
+    print("🚀 MÓDULO 2 (DEBUG v4 PID): PARTICIPANTES DETALLADOS")
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
     (Path(OUT_DIR)/"participants").mkdir(parents=True, exist_ok=True)
 
