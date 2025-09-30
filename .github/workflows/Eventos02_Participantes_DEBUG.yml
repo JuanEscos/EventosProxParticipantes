@@ -1,7 +1,9 @@
 name: Eventos02_Participantes_DEBUG
 
 on:
-  workflow_dispatch  # Permitir ejecución manual
+  schedule:
+    - cron: '1 4 * * *'  # Ejecutar diariamente a las 04:01 UTC
+  workflow_dispatch:      # Permitir ejecución manual
 
 jobs:
   participants_debug:
