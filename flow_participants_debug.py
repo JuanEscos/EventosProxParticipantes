@@ -52,8 +52,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 try: load_dotenv(SCRIPT_DIR / ".env")
 except Exception: pass
 
-FLOW_EMAIL = os.getenv("FLOW_EMAIL", "")
-FLOW_PASS  = os.getenv("FLOW_PASS", "")
+FLOW_EMAIL = os.getenv("FLOW_EMAILRQ", "")
+FLOW_PASS  = os.getenv("FLOW_PASSRQ", "")
 
 HEADLESS        = os.getenv("HEADLESS", "true").lower() == "true"
 INCOGNITO       = os.getenv("INCOGNITO", "true").lower() == "true"
@@ -137,8 +137,8 @@ def _login(driver):
                        (By.XPATH,"//button[contains(.,'Sign') or contains(.,'Log') or contains(.,'Iniciar')]")])
     if not (email and pwd and btn): return False
 
-    email.clear(); email.send_keys(FLOW_EMAILRQ); sleep()
-    pwd.clear();   pwd.send_keys(FLOW_PASSRQ);    sleep()
+    email.clear(); email.send_keys(FLOW_EMAIL); sleep()
+    pwd.clear();   pwd.send_keys(FLOW_PASS);    sleep()
     btn.click()
     try:
         WebDriverWait(driver, 40).until(lambda d: "/user/login" not in d.current_url)
