@@ -3,23 +3,6 @@
 
 """
 FLOWAGILITY SCRAPER - MÓDULO 2 (DEBUG): PARTICIPANTES (DETALLE + RAW HTML)
-- Lee ./output/01events.json
-- Para cada evento: visita participants_list, abre cada participante,
-  extrae campos del panel Binomio + Pruebas RFEC + bloques "Open ..."
-- Salidas:
-  * ./output/02participants.json (lista agregada, limpia)
-  * ./output/02participants_debug.json (si DEBUG_PARTICIPANTS=1, incluye raw_panel_html)
-  * ./output/participants/02p_<event_id>.json (detalle por evento)
-
-ENV útiles:
-  FLOW_EMAIL / FLOW_PASS (login)
-  HEADLESS=true/false
-  INCOGNITO=true/false
-  OUT_DIR=./output
-  LIMIT_EVENTS=0  (0 = sin límite)
-  PER_EVENT_MAX_S=240
-  MAX_RUNTIME_MIN=0 (0 = sin tope)
-  DEBUG_PARTICIPANTS=1 para generar 02participants_debug.json con raw_panel_html
 """
 
 import os, sys, json, re, time, unicodedata, random, traceback
@@ -106,14 +89,11 @@ def _login(driver):
     WebDriverWait(driver, 45).until(EC.presence_of_element_located((By.TAG_NAME,"body")))
     sleep(0.8,1.5)
     if "/user/login" not in driver.current_url: return True
-
-    if not FLOW_EMAIL or not FLOW_PASS:
-        log("❌ Falta FLOW_EMAIL / FLOW_PASS"); return False
+    if not FLOW_EMAIL or not FLOW_PASS: return False
 
     def _find_any(cands):
         for sel in cands:
-            try:
-                return WebDriverWait(driver,10).until(EC.element_to_be_clickable(sel))
+            try: return WebDriverWait(driver,10).until(EC.element_to_be_clickable(sel))
             except: pass
         return None
 
@@ -122,7 +102,6 @@ def _login(driver):
     btn   = _find_any([(By.CSS_SELECTOR,'button[type="submit"]'),
                        (By.XPATH,"//button[contains(.,'Sign') or contains(.,'Log') or contains(.,'Iniciar')]")])
     if not (email and pwd and btn): return False
-
     email.clear(); email.send_keys(FLOW_EMAIL); sleep()
     pwd.clear();   pwd.send_keys(FLOW_PASS);    sleep()
     btn.click()
@@ -130,8 +109,7 @@ def _login(driver):
         WebDriverWait(driver, 40).until(lambda d: "/user/login" not in d.current_url)
         sleep(0.8,1.5)
         return True
-    except TimeoutException:
-        return False
+    except TimeoutException: return False
 
 def _accept_cookies(driver):
     sels = ['button[aria-label="Accept all"]','button[aria-label="Aceptar todo"]',
@@ -141,14 +119,6 @@ def _accept_cookies(driver):
             btns = driver.find_elements(By.CSS_SELECTOR, css)
             if btns: btns[0].click(); sleep(0.2,0.4); return True
         except: pass
-    # fallback JS best-effort
-    try:
-        driver.execute_script("""
-          for (const b of document.querySelectorAll('button')) {
-            if (/aceptar|accept|consent|agree/i.test(b.textContent)) { b.click(); break; }
-          }
-        """); sleep(0.2,0.3)
-    except: pass
     return True
 
 # ---------- helpers participantes ----------
@@ -168,7 +138,6 @@ def _parse_open_blocks(panel_soup):
         for sib in h.find_next_siblings("div"):
             txt = _clean(sib.get_text())
             cls = " ".join(sib.get("class", []))
-            # si aparece otro título fuerte de Open, cerramos bloque
             if re.search(r"\bfont-bold\b.*\btext-sm\b", cls) and "open" in txt.lower(): break
             if txt.lower() == "fecha":
                 val = sib.find_next_sibling("div")
@@ -180,25 +149,20 @@ def _parse_open_blocks(panel_soup):
     return blocks
 
 def _parse_panel_html(panel_html):
-    """Devuelve dict con campos normalizados + (opcional) _raw_panel_html."""
     soup = BeautifulSoup(panel_html, "html.parser")
     data = {}
-    # 1) pares etiqueta/valor
     for lab in soup.select("div.text-gray-500.text-sm"):
         label = _clean(lab.get_text()).lower()
         val_div = lab.find_next_sibling("div")
         value = _clean(val_div.get_text()) if val_div else ""
         key = ALIASES.get(label)
-        if key and value:
-            data[key] = value
-    # 2) bloques Open …
+        if key and value: data[key] = value
     data["open_blocks"] = _parse_open_blocks(soup)
     if DEBUG_PARTICIPANTS:
         data["_raw_panel_html"] = panel_html
     return data
 
 def _wait_panel_and_parse(driver):
-    """Espera el último panel 'Binomio' y lo parsea."""
     try:
         WebDriverWait(driver, 8).until(
             EC.presence_of_element_located(
@@ -227,21 +191,16 @@ def _find_all_toggles(driver):
     vis = []
     for e in els:
         try:
-            if e.is_displayed() and e.size.get("height",0) > 8:
-                vis.append(e)
+            if e.is_displayed() and e.size.get("height",0) > 8: vis.append(e)
         except: pass
     return vis
 
 def _click_safely(driver, el):
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        sleep(0.1,0.2)
-        el.click()
-        return True
+        sleep(0.1,0.2); el.click(); return True
     except (ElementClickInterceptedException, StaleElementReferenceException):
-        try:
-            driver.execute_script("arguments[0].click();", el)
-            return True
+        try: driver.execute_script("arguments[0].click();", el); return True
         except: return False
     except: return False
 
@@ -259,75 +218,60 @@ def _parse_altura_cm(s):
     return float(m.group(1)) if m else None
 
 def extract_event_participants(driver, event, per_event_deadline):
-    """Procesa una URL de participantes y devuelve dict con participants[]."""
     url = (event.get("enlaces") or {}).get("participantes","")
     eid = event.get("id","")
     ename = event.get("nombre","")
     out = {
-        "event_id": eid,
-        "event_name": ename,
-        "participants_url": url,
-        "participants_count": 0,
-        "participants": [],
-        "estado": "ok",
-        "timestamp": datetime.now().isoformat()
+        "event_id": eid, "event_name": ename, "participants_url": url,
+        "participants_count": 0, "participants": [],
+        "estado": "ok", "timestamp": datetime.now().isoformat()
     }
-    if not url:
-        out["estado"]="sin_url"; return out
+    if not url: out["estado"]="sin_url"; return out
     try:
         driver.get(url)
         WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.TAG_NAME,"body")))
         _accept_cookies(driver)
-    except Exception as e:
+    except Exception:
         out["estado"]="timeout"; return out
 
     toggles = _find_all_toggles(driver)
     if not toggles:
-        out["estado"]="empty"; return out
+        out["estado"]="empty"
+        # 💾 Guardar dump HTML para depuración
+        try:
+            raw_path = Path(OUT_DIR)/"participants"/f"raw_{eid}.html"
+            Path(OUT_DIR,"participants").mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(driver.page_source, encoding="utf-8")
+            log(f"💾 Dump HTML guardado en {raw_path}")
+        except Exception as e:
+            log(f"⚠️ No se pudo guardar dump HTML: {e}")
+        return out
 
     for idx, t in enumerate(toggles, 1):
         if _left(per_event_deadline) <= 0:
             out["estado"]="timeout"; break
         if not _click_safely(driver, t): continue
-
-        # margen para hidratar el panel
         sleep(0.2,0.4)
-
-        # 1ª pasada
         data = _wait_panel_and_parse(driver)
-        # Fallback si faltan claves críticas
         if not data or (not data.get("dorsal") and not data.get("guia") and not data.get("perro")):
-            sleep(0.3,0.5)
-            data = _wait_panel_and_parse(driver)
-
-        if not data:
-            _click_safely(driver, t)  # cerrar si abrió
-            continue
-
+            sleep(0.3,0.5); data = _wait_panel_and_parse(driver)
+        if not data: _click_safely(driver, t); continue
         p = {
             "event_id": eid, "event_name": ename,
-            "dorsal": data.get("dorsal",""),
-            "guia": data.get("guia",""),
-            "perro": data.get("perro",""),
-            "raza": data.get("raza",""),
+            "dorsal": data.get("dorsal",""), "guia": data.get("guia",""),
+            "perro": data.get("perro",""), "raza": data.get("raza",""),
             "edad_meses": _parse_age_meses(data.get("edad","")),
             "genero": data.get("genero",""),
             "altura_cm": _parse_altura_cm(data.get("altura_cm","")),
-            "club": data.get("club",""),
-            "licencia": data.get("licencia",""),
+            "club": data.get("club",""), "licencia": data.get("licencia",""),
             "federacion": data.get("federacion",""),
             "open_blocks": data.get("open_blocks", []),
         }
         if DEBUG_PARTICIPANTS:
             p["raw_panel_html"] = data.get("_raw_panel_html", "")
-
         out["participants"].append(p)
         out["participants_count"] = len(out["participants"])
-
-        # cerrar el panel para mantener el "último grid" coherente
-        _click_safely(driver, t)
-        sleep(0.1,0.2)
-
+        _click_safely(driver, t); sleep(0.1,0.2)
     return out
 
 def main():
@@ -337,8 +281,7 @@ def main():
 
     events_path = Path(OUT_DIR)/"01events.json"
     if not events_path.exists():
-        log("❌ Falta ./output/01events.json")
-        return False
+        log("❌ Falta ./output/01events.json"); return False
 
     events = json.load(open(events_path,"r",encoding="utf-8"))
     if LIMIT_EVENTS>0: events = events[:LIMIT_EVENTS]
@@ -350,30 +293,21 @@ def main():
         except: pass
         return False
 
-    aggregated = []
-    aggregated_debug = []
+    aggregated, aggregated_debug = [], []
     start_global = _deadline(MAX_RUNTIME_MIN*60) if MAX_RUNTIME_MIN>0 else None
 
     for i, ev in enumerate(events,1):
         if start_global and _left(start_global) <= 0:
             log("⏹️ Tope global alcanzado"); break
-
         log(f"Evento {i}/{len(events)}: {ev.get('nombre')}")
         res = extract_event_participants(driver, ev, _deadline(PER_EVENT_MAX_S))
-
-        # Guardar por evento
         out_path = Path(OUT_DIR)/"participants"/f"02p_{ev.get('id','idx'+str(i))}.json"
         with open(out_path,"w",encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False, indent=2)
-
-        # Agregados
         aggregated.extend(res.get("participants", []))
-        if DEBUG_PARTICIPANTS:
-            aggregated_debug.extend(res.get("participants", []))
-
+        if DEBUG_PARTICIPANTS: aggregated_debug.extend(res.get("participants", []))
         sleep(0.3,0.7)
 
-    # Guardar agregados
     with open(Path(OUT_DIR)/"02participants.json","w",encoding="utf-8") as f:
         json.dump(aggregated, f, ensure_ascii=False, indent=2)
     if DEBUG_PARTICIPANTS:
@@ -388,4 +322,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(0 if main() else 1)
-
