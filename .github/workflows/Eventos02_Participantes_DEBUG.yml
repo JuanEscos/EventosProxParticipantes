@@ -125,7 +125,7 @@ jobs:
          else:
            print("No existe 02participants.json")
            sys.exit(1)
-      PY
+         PY
 
 
       - name: Compress outputs (incluye debug)
