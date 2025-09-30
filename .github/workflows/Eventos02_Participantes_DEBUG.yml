@@ -13,7 +13,7 @@ jobs:
       PER_EVENT_MAX_S: "240"
       MAX_RUNTIME_MIN: "40"
       LIMIT_EVENTS: "2"             # ajusta si quieres
-      DEBUG_PARTICIPANTS: "1"       # ← activa debug (genera 02participants_debug.json)
+      DEBUG_PARTICIPANTS: "1"       # ← genera 02participants_debug.json y raw_*.html
 
     steps:
       - name: Checkout code
@@ -72,8 +72,8 @@ jobs:
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
-          FLOW_PASS: ${{ secrets.FLOW_PASSRQ }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
+          FLOW_PASS: ${{ secrets.FLOW_PASS }}
           HEADLESS: "true"
           MAX_SCROLLS: "12"
           SCROLL_WAIT_S: "2.0"
@@ -103,8 +103,8 @@ jobs:
         timeout-minutes: 90
         shell: bash
         env:
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
-          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASS }}
         run: |
           echo "=== EXTRAER PARTICIPANTES (DEBUG) ==="
           python ./flow_participants_debug.py
@@ -141,24 +141,31 @@ jobs:
               print("Ejemplo:", {k: sample.get(k) for k in ("event_id","dorsal","guia","perro","club")})
           PY
 
-      - name: Compress outputs (incluye debug)
+      - name: Compress outputs (incluye debug y raw html)
         shell: bash
         run: |
           set -e
-          gzip -9 -c "./output/02participants.json" > "./output/02participants.json.gz"
+          # agregados
+          gzip -9 -c "./output/02participants.json" > "./output/02participants.json.gz" || true
           if [ -f "./output/02participants_debug.json" ]; then
-            gzip -9 -c "./output/02participants_debug.json" > "./output/02participants_debug.json.gz"
+            gzip -9 -c "./output/02participants_debug.json" > "./output/02participants_debug.json.gz" || true
           fi
+          # por evento
           shopt -s nullglob
           for f in ./output/participants/02p_*.json; do
-            gzip -9 -c "$f" > "${f}.gz"
+            gzip -9 -c "$f" > "${f}.gz" || true
           done
-          echo "== GZ en output =="
-          ls -la ./output/*.gz || true
-          echo "== GZ por evento =="
-          ls -la ./output/participants/*.gz || true
+          # raw html (si existen)
+          for f in ./output/participants/raw_*.html; do
+            gzip -9 -c "$f" > "${f}.gz" || true
+          done
 
-      - name: Upload artifacts (incluye debug)
+          echo "== GZ en output =="
+          ls -la ./output/*.gz 2>/dev/null || true
+          echo "== GZ por evento/raw =="
+          ls -la ./output/participants/*.gz 2>/dev/null || true
+
+      - name: Upload artifacts (incluye debug + raw html)
         uses: actions/upload-artifact@v4
         with:
           name: participantes-debug
@@ -169,9 +176,11 @@ jobs:
             ./output/02participants_debug.json.gz
             ./output/participants/*.json
             ./output/participants/*.json.gz
+            ./output/participants/raw_*.html
+            ./output/participants/raw_*.html.gz
           retention-days: 7
 
-      - name: Upload to FTP (opcional, incluye debug)
+      - name: Upload to FTP (opcional, incluye debug + raw html)
         if: always()
         shell: bash
         env:
@@ -201,18 +210,29 @@ jobs:
             return 1
           }
 
-          upload "./output/02participants.json.gz" "02participants.json.gz" || exit 1
-          upload "./output/02participants.json"    "02participants.json"    || true
+          # agregados
+          [ -f "./output/02participants.json.gz" ] && upload "./output/02participants.json.gz" "02participants.json.gz" || true
+          [ -f "./output/02participants.json" ]    && upload "./output/02participants.json"    "02participants.json"    || true
+          [ -f "./output/02participants_debug.json.gz" ] && upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz" || true
+          [ -f "./output/02participants_debug.json" ]    && upload "./output/02participants_debug.json"    "02participants_debug.json"    || true
 
-          if [ -f "./output/02participants_debug.json.gz" ]; then
-            upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz" || true
-          fi
-          if [ -f "./output/02participants_debug.json" ]; then
-            upload "./output/02participants_debug.json"    "02participants_debug.json"    || true
-          fi
-
+          # por evento
           shopt -s nullglob
           for f in ./output/participants/02p_*.json.gz; do
             base=$(basename "$f")
             upload "$f" "participants/${base}" || echo "Fallo subiendo ${base}"
+          done
+          for f in ./output/participants/02p_*.json; do
+            base=$(basename "$f")
+            upload "$f" "participants/${base}" || echo "Fallo subiendo ${base}"
+          done
+
+          # raw html (sin y con gzip) a subcarpeta 'participants/raw'
+          for f in ./output/participants/raw_*.html.gz; do
+            base=$(basename "$f")
+            upload "$f" "participants/raw/${base}" || echo "Fallo subiendo ${base}"
+          done
+          for f in ./output/participants/raw_*.html; do
+            base=$(basename "$f")
+            upload "$f" "participants/raw/${base}" || echo "Fallo subiendo ${base}"
           done
