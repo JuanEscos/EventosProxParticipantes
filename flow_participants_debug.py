@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-FLOWAGILITY SCRAPER - MÓDULO 2 (DEBUG v2 PID): PARTICIPANTES DETALLADOS
+FLOWAGILITY SCRAPER - MÓDULO 2 (DEBUG v3 PID): PARTICIPANTES DETALLADOS
 - Lee ./output/01events.json
-- Para cada evento: abre participants_list, detecta booking_id (PID),
-  click por PID, espera bloque #PID y mapea campos con JS (y fallback BS).
-- Fusión de fuentes: BeautifulSoup (hermano fuerte) + JS mapping.
+- Abre participants_list, detecta booking_id (PID), click por PID.
+- Mapea panel con combinación: JS (con labels ES/EN) + BeautifulSoup (hermano fuerte) + fallback XPATH.
 - Salidas:
   * ./output/02participants.json
   * ./output/02participants_debug.json (si DEBUG_PARTICIPANTS=1)
@@ -52,8 +51,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 try: load_dotenv(SCRIPT_DIR / ".env")
 except Exception: pass
 
-FLOW_EMAIL = os.getenv("FLOW_EMAILRQ", "")
-FLOW_PASS  = os.getenv("FLOW_PASSRQ", "")
+FLOW_EMAIL = os.getenv("FLOW_EMAIL", "")
+FLOW_PASS  = os.getenv("FLOW_PASS", "")
 
 HEADLESS        = os.getenv("HEADLESS", "true").lower() == "true"
 INCOGNITO       = os.getenv("INCOGNITO", "true").lower() == "true"
@@ -63,13 +62,18 @@ PER_EVENT_MAX_S = int(os.getenv("PER_EVENT_MAX_S", "240"))
 MAX_RUNTIME_MIN = int(os.getenv("MAX_RUNTIME_MIN", "0"))
 DEBUG_PARTICIPANTS = os.getenv("DEBUG_PARTICIPANTS", "0") == "1"
 
-# Mapa de etiquetas → claves canónicas
+# Etiquetas → claves canónicas (incluye ES + EN)
 ALIASES = {
+    # ES
     "dorsal":"dorsal","guía":"guia","guia":"guia","perro":"perro","raza":"raza",
     "edad":"edad","género":"genero","genero":"genero","altura (cm)":"altura_cm","altura":"altura_cm",
     "club":"club","licencia":"licencia","federación":"federacion","federacion":"federacion",
     "nombre de pedigree":"nombre_pedigree","nombre de pedrigree":"nombre_pedigree",
-    "país":"pais","pais":"pais","equipo":"equipo"
+    "país":"pais","pais":"pais","equipo":"equipo",
+    # EN
+    "handler":"guia","dog":"perro","breed":"raza","age":"edad","gender":"genero",
+    "height (cm)":"altura_cm","license number":"licencia","federation":"federacion",
+    "country":"pais","team":"equipo"
 }
 
 def log(s): print(f"[{datetime.now().strftime('%H:%M:%S')}] {s}")
@@ -211,10 +215,20 @@ let tmpMangas = null;
 const fields = {};
 const schedule = [];
 
+// Etiquetas ES + EN
 const simpleFieldLabels = new Set([
-  "Dorsal","Guía","Guia","Perro","Raza","Edad","Género","Genero",
-  "Altura (cm)","Altura","Nombre de Pedigree","Nombre de Pedrigree",
-  "País","Pais","Licencia","Equipo","Club","Federación","Federacion"
+  "Dorsal","Guía","Guia","Handler",
+  "Perro","Dog",
+  "Raza","Breed",
+  "Edad","Age",
+  "Género","Genero","Gender",
+  "Altura (cm)","Altura","Height (cm)",
+  "Nombre de Pedigree","Nombre de Pedrigree",
+  "País","Pais","Country",
+  "Licencia","License number",
+  "Equipo","Team",
+  "Club",
+  "Federación","Federacion","Federation"
 ]);
 
 while (node){
@@ -327,7 +341,7 @@ def _parse_panel_html(panel_html):
                 block["mangas"] = _clean(val.get_text()) if val else ""
         open_blocks.append(block)
 
-    # 3) Normaliza claves según ALIASES
+    # 3) Normaliza claves según ALIASES (ES+EN)
     out = {}
     for k, v in fields_raw.items():
         kk = _clean(k).lower()
@@ -385,15 +399,7 @@ def _fallback_map_participant(driver, pid):
     except Exception:
         return {"fields": {}, "schedule": []}
 
-# ===================== Normalizadores =====================
-
-def _parse_age_meses(s):
-    s = _clean(s).lower()
-    m = re.search(r"(\d+)\s*mes", s)
-    if m: return int(m.group(1))
-    m = re.search(r"(\d+)\s*a[nñ]o", s)
-    if m: return int(m.group(1))*12
-    return None
+# ===================== Normalizadores & merge =====================
 
 def _parse_altura_cm(s):
     s = _clean(s).replace(",",".")
@@ -421,13 +427,11 @@ def _merge_sources(bs_data, js_payload):
     bs_fields = {k:v for k,v in (bs_data or {}).items() if k != "open_blocks"}
     merged.update(bs_fields)
 
-    # JS → canónicas
     js_fields = _to_canonical_from_jsfields((js_payload or {}).get("fields") or {})
     for k, v in js_fields.items():
         if not merged.get(k):
             merged[k] = v
 
-    # open_blocks: si BS no trajo nada, intenta desde JS schedule
     merged_ob = (bs_data or {}).get("open_blocks", [])
     if not merged_ob:
         sch = (js_payload or {}).get("schedule") or []
@@ -437,7 +441,6 @@ def _merge_sources(bs_data, js_payload):
         ]
     merged["open_blocks"] = merged_ob
 
-    # Raw panel si hemos guardado en BS
     if DEBUG_PARTICIPANTS and bs_data and bs_data.get("_raw_panel_html"):
         merged["_raw_panel_html"] = bs_data["_raw_panel_html"]
 
@@ -467,7 +470,6 @@ def _fields_to_participant(eid, ename, plist, pid, ev_title, fields_dict):
     }
     if DEBUG_PARTICIPANTS and fields_dict.get("_raw_panel_html"):
         part["raw_panel_html"] = fields_dict["_raw_panel_html"]
-    # Normalizar tipos
     if part["altura_cm"]: part["altura_cm"] = _parse_altura_cm(part["altura_cm"])
     return part
 
@@ -497,7 +499,6 @@ def extract_event_participants(driver, event, per_event_deadline):
     pids = _collect_booking_ids(driver)
     if not pids:
         out["estado"]="empty"
-        # Dump HTML completo de la página para depurar selectores
         try:
             raw_path = Path(OUT_DIR)/"participants"/f"raw_{eid}.html"
             Path(OUT_DIR,"participants").mkdir(parents=True, exist_ok=True)
@@ -528,26 +529,24 @@ def extract_event_participants(driver, event, per_event_deadline):
 
         sleep(0.20, 0.35)
 
-        # 1) Obtener HTML del bloque y parsearlo con BS
+        # 1) HTML del bloque + BS
         html = ""
         try: html = block_el.get_attribute("outerHTML") or ""
         except Exception: html = ""
         bs_data = _parse_panel_html(html) if html else {}
 
-        # 2) Intentar JS mapping rico
+        # 2) JS mapping rico
         payload_js = None
         try:
             payload_js = driver.execute_script(JS_MAP_PARTICIPANT_RICH, pid)
         except Exception:
             payload_js = None
 
-        # 3) Fallback XPATH si tanto BS como JS no traen nada
+        # 3) Fallback XPATH si no hay nada
         if not bs_data and (not payload_js or not isinstance(payload_js, dict)):
-            payload_x = _fallback_map_participant(driver, pid)
-            # convertir fallback a 'js-like' para fusionarlo fácil
-            payload_js = payload_x
+            payload_js = _fallback_map_participant(driver, pid)
 
-        # 4) Fusión de fuentes
+        # 4) Fusión
         merged_fields = _merge_sources(bs_data, payload_js)
 
         # 5) Construye participante
@@ -555,7 +554,7 @@ def extract_event_participants(driver, event, per_event_deadline):
         out["participants"].append(part)
         out["participants_count"] = len(out["participants"])
 
-        # Cierra bloque (click de nuevo sobre el bloque o el botón)
+        # Cierra bloque (click de nuevo)
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", block_el)
             driver.execute_script("arguments[0].click();", block_el)
@@ -570,7 +569,7 @@ def extract_event_participants(driver, event, per_event_deadline):
 # ===================== MAIN =====================
 
 def main():
-    print("🚀 MÓDULO 2 (DEBUG v2 PID): PARTICIPANTES DETALLADOS")
+    print("🚀 MÓDULO 2 (DEBUG v3 PID): PARTICIPANTES DETALLADOS")
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
     (Path(OUT_DIR)/"participants").mkdir(parents=True, exist_ok=True)
 
