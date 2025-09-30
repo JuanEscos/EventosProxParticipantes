@@ -137,8 +137,8 @@ def _login(driver):
                        (By.XPATH,"//button[contains(.,'Sign') or contains(.,'Log') or contains(.,'Iniciar')]")])
     if not (email and pwd and btn): return False
 
-    email.clear(); email.send_keys(FLOW_EMAIL); sleep()
-    pwd.clear();   pwd.send_keys(FLOW_PASS);    sleep()
+    email.clear(); email.send_keys(FLOW_EMAILRQ); sleep()
+    pwd.clear();   pwd.send_keys(FLOW_PASSRQ);    sleep()
     btn.click()
     try:
         WebDriverWait(driver, 40).until(lambda d: "/user/login" not in d.current_url)
