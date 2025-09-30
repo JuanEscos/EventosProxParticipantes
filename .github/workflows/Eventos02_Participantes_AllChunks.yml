@@ -1,0 +1,243 @@
+name: Eventos02_Participantes_AllChunks
+
+on:
+  schedule:
+    - cron: '5 3 * * *'   # 03:05 UTC → offset 0
+    - cron: '5 4 * * *'   # 04:05 UTC → offset 50
+    - cron: '5 5 * * *'   # 05:05 UTC → offset 100
+  workflow_dispatch:
+    inputs:
+      chunk_size:
+        description: "Tamaño de tanda (CHUNK_SIZE)"
+        required: false
+        default: "50"
+      chunk_offset:
+        description: "Offset de tanda (CHUNK_OFFSET). Si se deja vacío, se calcula automáticamente."
+        required: false
+        default: ""
+      limit_events:
+        description: "Limitar nº de eventos (0 = sin límite)"
+        required: false
+        default: "0"
+      max_runtime_min:
+        description: "Tiempo máx. global (min) para cortar ordenadamente"
+        required: false
+        default: "55"
+
+concurrency:
+  group: eventos02-participantes
+  cancel-in-progress: false
+
+jobs:
+  participants:
+    runs-on: ubuntu-22.04
+
+    env:
+      TZ: Europe/Madrid
+      HEADLESS: "true"
+      OUT_DIR: ./output
+
+      # --- Politeness ---
+      THROTTLE_PANEL_MS_MIN: "500"
+      THROTTLE_PANEL_MS_MAX: "1100"
+      THROTTLE_EVENT_S_MIN: "8"
+      THROTTLE_EVENT_S_MAX: "14"
+      MAX_PANELS_PER_EVENT: "0"
+
+      # --- Límites ---
+      PER_EVENT_MAX_S: "360"
+      MAX_RUNTIME_MIN: ${{ inputs.max_runtime_min || '55' }}
+
+      # --- Chunking por defecto (se recalcula abajo) ---
+      CHUNK_SIZE: ${{ inputs.chunk_size || '50' }}
+      CHUNK_OFFSET: "0"
+
+      DEBUG_PARTICIPANTS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Chrome & ChromeDriver (fast)
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg unzip
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+          URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+          if wget -q --spider "$URL"; then
+            wget -O /tmp/chromedriver.zip "$URL"
+            unzip -o /tmp/chromedriver.zip -d /tmp/
+            sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+            sudo chmod +x /usr/local/bin/chromedriver
+          else
+            sudo apt-get install -y chromium-chromedriver
+            sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
+          fi
+          which google-chrome-stable && google-chrome-stable --version
+          which chromedriver && chromedriver --version
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium beautifulsoup4 python-dotenv lxml requests webdriver-manager
+
+      # Cálculo para ejecuciones programadas (por hora)
+      - name: Derive CHUNK_OFFSET by hour (schedule)
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          set -e
+          H=$(date -u +%H)
+          if [ "$H" = "03" ]; then
+            OFF=0
+          elif [ "$H" = "04" ]; then
+            OFF=50
+          elif [ "$H" = "05" ]; then
+            OFF=100
+          else
+            OFF=0
+          fi
+          echo "CHUNK_OFFSET=$OFF" >> $GITHUB_ENV
+          echo "CHUNK_SIZE=${{ env.CHUNK_SIZE }}" >> $GITHUB_ENV
+          echo "Usando CHUNK_OFFSET (schedule): $OFF"
+
+      # Manual: si el usuario NO da offset → rotamos 0/50/100 con run_number
+      - name: Auto-rotate CHUNK_OFFSET (manual, if empty)
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.chunk_offset == '' || inputs.chunk_offset == null) }}
+        run: |
+          set -e
+          SIZE=${{ inputs.chunk_size || '50' }}
+          # run_number comienza en 1; rotamos entre 0,1,2
+          IDX=$(( ( ${{ github.run_number }} - 1 ) % 3 ))
+          OFF=$(( IDX * SIZE ))
+          echo "CHUNK_SIZE=$SIZE" >> $GITHUB_ENV
+          echo "CHUNK_OFFSET=$OFF" >> $GITHUB_ENV
+          echo "Usando CHUNK_OFFSET rotatorio (manual): $OFF (IDX=$IDX, SIZE=$SIZE)"
+
+      # Manual: si el usuario DA offset → respetarlo
+      - name: Override CHUNK_OFFSET from manual input
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.chunk_offset != '' }}
+        run: |
+          echo "CHUNK_OFFSET=${{ inputs.chunk_offset }}" >> $GITHUB_ENV
+          echo "CHUNK_SIZE=${{ inputs.chunk_size || '50' }}" >> $GITHUB_ENV
+          echo "CHUNK_OFFSET (manual input): ${{ inputs.chunk_offset }}"
+
+      - name: Show effective throttling & chunk params
+        run: |
+          echo "THROTTLE_PANEL_MS_MIN=$THROTTLE_PANEL_MS_MIN"
+          echo "THROTTLE_PANEL_MS_MAX=$THROTTLE_PANEL_MS_MAX"
+          echo "THROTTLE_EVENT_S_MIN=$THROTTLE_EVENT_S_MIN"
+          echo "THROTTLE_EVENT_S_MAX=$THROTTLE_EVENT_S_MAX"
+          echo "MAX_PANELS_PER_EVENT=$MAX_PANELS_PER_EVENT"
+          echo "PER_EVENT_MAX_S=$PER_EVENT_MAX_S"
+          echo "MAX_RUNTIME_MIN=$MAX_RUNTIME_MIN"
+          echo "CHUNK_SIZE=$CHUNK_SIZE"
+          echo "CHUNK_OFFSET=$CHUNK_OFFSET"
+
+      - name: Prepare output dirs
+        run: mkdir -p ./output ./output/participants
+
+      - name: Ensure 01events.json
+        run: |
+          if [ ! -f "./output/01events.json" ]; then
+            echo "❌ No existe ./output/01events.json — ejecuta primero el Módulo 1."
+            exit 1
+          fi
+          ls -la ./output/01events.json
+
+      - name: Run participants scraper (throttling + chunking)
+        env:
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
+        run: |
+          echo "=== EXTRAER PARTICIPANTES (ALL CHUNKS) ==="
+          python ./flow_participants_debug.py
+          echo "=== FIN EXTRAER PARTICIPANTES ==="
+          ls -la ./output || true
+          ls -la ./output/participants || true
+
+      - name: Quick sanity check JSON
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("output/02participants.json")
+          if not p.exists():
+              raise SystemExit("02participants.json no existe")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          print("Total participantes:", len(data))
+          if data:
+              sample = {k: data[0].get(k) for k in ("event_id","BinomID","guia","perro","club")}
+              print("Ejemplo:", sample)
+          PY
+
+      - name: Gzip outputs for FTP
+        run: |
+          set -e
+          for f in output/02participants.json output/02participants_debug.json output/participants/*.json; do
+            if [ -f "$f" ]; then
+              gzip -9 -c "$f" > "${f}.gz"
+            fi
+          done
+          ls -la output/*.gz || true
+          ls -la output/participants/*.gz || true
+
+      - name: Upload to FTP (gz only, robust)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          set -e
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
+            echo "Variables FTP no configuradas"
+            exit 1
+          fi
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Subiendo a: ${BASE_URL}/"
+
+          upload() {
+            local SRC="$1" DST="$2"
+            for i in 1 2 3; do
+              curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+                   --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+                   --upload-file "$SRC" \
+                   "${BASE_URL}/${DST}" && return 0
+              echo "Reintento $i falló subiendo ${SRC} → ${DST}; esperando…"
+              sleep 3
+            done
+            echo "Fallo subiendo ${SRC} → ${DST}"
+          }
+
+          [ -f "./output/02participants.json.gz" ] && upload "./output/02participants.json.gz" "02participants.json.gz"
+          [ -f "./output/02participants_debug.json.gz" ] && upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
+
+          shopt -s nullglob
+          for f in ./output/participants/02p_*.json.gz; do
+            base=$(basename "$f")
+            upload "$f" "participants/${base}"
+          done
+
+      - name: Upload artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: participantes-json-${{ github.run_number }}
+          path: |
+            output/02participants.json
+            output/02participants.json.gz
+            output/02participants_debug.json
+            output/02participants_debug.json.gz
+            output/participants/*.json
+            output/participants/*.json.gz
+          retention-days: 7
