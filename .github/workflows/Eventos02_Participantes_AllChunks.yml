@@ -147,6 +147,35 @@ jobs:
       - name: Prepare output dirs
         run: mkdir -p ./output ./output/participants
 
+      - name: Try to fetch 01events.json from FTP (Plan A)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          set -e
+          mkdir -p ./output
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
+            echo "⚠️ Variables FTP no configuradas; salto descarga."
+            exit 0
+          fi
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
+          echo "Intentando descargar ${BASE_URL}/01events.json → ./output/01events.json"
+          # Intentar sincrono; si falla, seguimos (Plan B generará localmente)
+          set +e
+          curl --fail --ssl-reqd \
+               --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
+               "${BASE_URL}/01events.json" -o "./output/01events.json"
+          RC=$?
+          set -e
+          if [ $RC -eq 0 ]; then
+            echo "✅ Descargado 01events.json desde FTP"
+          else
+            echo "⚠️ No se pudo descargar 01events.json desde FTP (rc=$RC). Se intentará generar localmente."
+          fi
+
       - name: Ensure 01events.json
         run: |
           if [ ! -f "./output/01events.json" ]; then
