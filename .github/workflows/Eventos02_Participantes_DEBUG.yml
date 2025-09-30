@@ -119,10 +119,10 @@ jobs:
          if p.exists():
            data = json.loads(p.read_text(encoding="utf-8"))
            print("Total participantes:", len(data))
-        if data:
-            sample = data[0]
-            print("Ejemplo:", {k: sample.get(k) for k in ("event_id","dorsal","guia","perro","club")})
-        else:
+         if data:
+           sample = data[0]
+           print("Ejemplo:", {k: sample.get(k) for k in ("event_id","dorsal","guia","perro","club")})
+         else:
            print("No existe 02participants.json")
            sys.exit(1)
       PY
