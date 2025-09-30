@@ -108,20 +108,25 @@ jobs:
           ls -la "${OUT_DIR}/participants" || true
 
       - name: Quick sanity check
+        shell: bash
         run: |
-          echo "Conteo de participantes:"
-          python - << 'PY'
-import json, sys
-from pathlib import Path
-p = Path("./output/02participants.json")
-if p.exists():
-    data = json.loads(p.read_text(encoding="utf-8"))
-    print("Total participantes:", len(data))
-    if data:
-        print("Ejemplo:", {k:data[0][k] for k in ("event_id","dorsal","guia","perro","club") if k in data[0]})
-else:
-    print("No existe 02participants.json"); sys.exit(1)
-PY
+         echo "Conteo de participantes:"
+         python - <<'PY'
+         import json, sys
+         from pathlib import Path
+
+         p = Path("./output/02participants.json")
+         if p.exists():
+           data = json.loads(p.read_text(encoding="utf-8"))
+           print("Total participantes:", len(data))
+        if data:
+            sample = data[0]
+            print("Ejemplo:", {k: sample.get(k) for k in ("event_id","dorsal","guia","perro","club")})
+        else:
+           print("No existe 02participants.json")
+           sys.exit(1)
+      PY
+
 
       - name: Compress outputs (incluye debug)
         run: |
