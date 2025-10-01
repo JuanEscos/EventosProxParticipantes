@@ -52,7 +52,11 @@ jobs:
       CHUNK_SIZE: ${{ inputs.chunk_size || '50' }}
       CHUNK_OFFSET: "0"
 
-      DEBUG_PARTICIPANTS: "1"
+      # ⬅️ Producción: sin tope artificial
+      DEBUG_PARTICIPANTS: "0"
+
+      # ⬅️ 0 = sin límite (se puede sobreescribir en dispatch)
+      LIMIT_EVENTS: ${{ inputs.limit_events || '0' }}
 
     steps:
       - name: Checkout
@@ -98,14 +102,10 @@ jobs:
         run: |
           set -e
           H=$(date -u +%H)
-          if [ "$H" = "03" ]; then
-            OFF=0
-          elif [ "$H" = "04" ]; then
-            OFF=50
-          elif [ "$H" = "05" ]; then
-            OFF=100
-          else
-            OFF=0
+          if   [ "$H" = "03" ]; then OFF=0
+          elif [ "$H" = "04" ]; then OFF=50
+          elif [ "$H" = "05" ]; then OFF=100
+          else OFF=0
           fi
           echo "CHUNK_OFFSET=$OFF" >> $GITHUB_ENV
           echo "CHUNK_SIZE=${{ env.CHUNK_SIZE }}" >> $GITHUB_ENV
@@ -117,7 +117,6 @@ jobs:
         run: |
           set -e
           SIZE=${{ inputs.chunk_size || '50' }}
-          # run_number comienza en 1; rotamos entre 0,1,2
           IDX=$(( ( ${{ github.run_number }} - 1 ) % 3 ))
           OFF=$(( IDX * SIZE ))
           echo "CHUNK_SIZE=$SIZE" >> $GITHUB_ENV
@@ -143,6 +142,8 @@ jobs:
           echo "MAX_RUNTIME_MIN=$MAX_RUNTIME_MIN"
           echo "CHUNK_SIZE=$CHUNK_SIZE"
           echo "CHUNK_OFFSET=$CHUNK_OFFSET"
+          echo "LIMIT_EVENTS=$LIMIT_EVENTS"
+          echo "DEBUG_PARTICIPANTS=$DEBUG_PARTICIPANTS"
 
       - name: Prepare output dirs
         run: mkdir -p ./output ./output/participants
@@ -163,7 +164,6 @@ jobs:
           REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
           BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
           echo "Intentando descargar ${BASE_URL}/01events.json → ./output/01events.json"
-          # Intentar sincrono; si falla, seguimos (Plan B generará localmente)
           set +e
           curl --fail --ssl-reqd \
                --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
@@ -184,13 +184,38 @@ jobs:
           fi
           ls -la ./output/01events.json
 
+      - name: Count events in 01events.json
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("output/01events.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          if isinstance(data, dict) and "events" in data:
+              events = data["events"]
+          else:
+              events = data
+          print("Eventos detectados:", len(events))
+          # muestra 5 ids/títulos
+          def pick(ev):
+              for k in ("uuid","id","event_id","slug","title","name"):
+                  if isinstance(ev, dict) and k in ev:
+                      return ev[k]
+              return str(ev)[:80]
+          for i, ev in enumerate(events[:5], 1):
+              print(i, pick(ev))
+          PY
+
       - name: Run participants scraper (throttling + chunking)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== EXTRAER PARTICIPANTES (ALL CHUNKS) ==="
-          python ./flow_participants_debug.py
+          python ./flow_participants_debug.py \
+            --chunk-size "$CHUNK_SIZE" \
+            --chunk-offset "$CHUNK_OFFSET" \
+            --limit-events "$LIMIT_EVENTS" \
+            --max-runtime-min "$MAX_RUNTIME_MIN"
           echo "=== FIN EXTRAER PARTICIPANTES ==="
           ls -la ./output || true
           ls -la ./output/participants || true
