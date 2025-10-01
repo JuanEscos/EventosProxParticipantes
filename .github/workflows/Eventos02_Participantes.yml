@@ -1,4 +1,4 @@
-name: Eventos02_Participantes_DEBUG
+name: Eventos02_Participantes
 
 on:
   workflow_dispatch: {}
@@ -93,7 +93,7 @@ jobs:
             fi
             if [ ! -f "./output/01events.json" ]; then
               echo "Generando 01events.json (flow_events.py)"
-              python ./flow_events.py
+              python ./flow_participants.py
             fi
             [ -f "./output/01events.json" ] || (echo "❌ Falta 01events.json" && exit 1)
           fi
@@ -107,7 +107,7 @@ jobs:
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== EXTRAER PARTICIPANTES (DEBUG) ==="
-          python ./flow_participants_debug.py
+          python ./flow_participants.py
           echo "=== FIN EXTRAER PARTICIPANTES ==="
           ls -la "${OUT_DIR}" || true
           ls -la "${OUT_DIR}/participants" || true
