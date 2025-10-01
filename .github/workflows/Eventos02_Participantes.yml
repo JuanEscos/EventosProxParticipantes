@@ -10,9 +10,9 @@ jobs:
       TZ: Europe/Madrid
       HEADLESS: "true"
       OUT_DIR: "./output"
-      PER_EVENT_MAX_S: "240"
-      MAX_RUNTIME_MIN: "40"
-      LIMIT_EVENTS: "2"             # ajusta si quieres
+      PER_EVENT_MAX_S: "600"
+      MAX_RUNTIME_MIN: "120"
+      LIMIT_EVENTS: "0"             # ajusta si quieres
       DEBUG_PARTICIPANTS: "1"       # ← genera 02participants_debug.json y raw_*.html
 
     steps:
