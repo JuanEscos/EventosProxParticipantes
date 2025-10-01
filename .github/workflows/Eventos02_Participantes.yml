@@ -84,8 +84,8 @@ jobs:
       # ========= MÓDULO 1: EVENTOS (SIN LÍMITE) =========
       - name: Run Module 1 (events)
         env:
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
-          FLOW_PASS:  ${{ secrets.FLOW_PASS }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
           HEADLESS: "true"
           MAX_SCROLLS: "15"
           SCROLL_WAIT_S: "3.0"
@@ -110,8 +110,8 @@ jobs:
       # ========= MÓDULO 2: PARTICIPANTES (TODOS) =========
       - name: Run Module 2 (participants, full)
         env:
-          FLOW_EMAIL: ${{ secrets.FLOW_EMAIL }}
-          FLOW_PASS:  ${{ secrets.FLOW_PASS }}
+          FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
+          FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== MÓDULO 2: PARTICIPANTES (FULL) ==="
           # Script v4.x que te pasé: flow_participants_debug.py
