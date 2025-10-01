@@ -94,7 +94,7 @@ jobs:
         run: |
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
           # Cambia el nombre del script si el tuyo es distinto:
-          python ./EventosProxBeta.py --module events
+          python ./flow_events.py --module events
           echo "=== FIN MÓDULO 1 ==="
           ls -la ./output || true
 
