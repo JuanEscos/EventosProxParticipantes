@@ -1,414 +1,522 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-FLOWAGILITY SCRAPER - MÓDULO 2: PARTICIPANTES POR EVENTO
+Scraper de participantes para FlowAgility (o similar) con Selenium.
+
 - Lee ./output/01events.json
-- Para cada evento, visita 'participants_list' y obtiene:
-    - numero_participantes (robusto: DOM vivo + fallback HTML)
-    - estado: ok | empty | login | timeout | error
-- Guarda:
-    - ./output/02participants.json  (lista agregada)
-    - ./output/participants/02p_<event_id>.json  (uno por evento)
+- Aplica chunking: CHUNK_SIZE + CHUNK_OFFSET
+- Respeta LIMIT_EVENTS (0 = sin límite) y MAX_RUNTIME_MIN (corte ordenado)
+- Login con email/contraseña (si procede)
+- Para cada evento, abre su página de "lista de participantes" y extrae filas
+
+ENV claves que puedes ajustar sin tocar código:
+  FLOW_BASE_URL                (default: "https://flowagility.com")
+  FLOW_LOGIN_URL               (default: FLOW_BASE_URL + "/login")
+  FLOW_SELECTOR_EMAIL          (default: input[name='email'])
+  FLOW_SELECTOR_PASSWORD       (default: input[name='password'])
+  FLOW_SELECTOR_LOGIN_BTN      (default: button[type='submit'])
+  FLOW_SELECTOR_LOGIN_CHECK    (default: a[href*='/logout'], usado para verificar login)
+  FLOW_SELECTOR_PARTS_TABLE    (default: "table")
+  FLOW_SELECTOR_PARTS_THEAD    (default: "thead tr th")
+  FLOW_SELECTOR_PARTS_ROWS     (default: "tbody tr")
+  FLOW_SELECTOR_PARTS_CELLS    (default: "td")
+  FLOW_PARTS_URL_SUFFIX        (default: "/participants_list")  # si no se da participants_url
+
+Además:
+  HEADLESS=true|false
+  THROTTLE_EVENT_S_MIN / THROTTLE_EVENT_S_MAX
+  PER_EVENT_MAX_S
+  MAX_PANELS_PER_EVENT (no usado si no hay subpaneles)
+  DEBUG_PARTICIPANTS (si 1, limita a 2 eventos)
+  OUT_DIR (default: ./output)
+
+Requisitos:
+  pip install selenium beautifulsoup4 python-dotenv lxml requests webdriver-manager
 """
 
-import os
-import sys
-import json
-import re
-import time
-import traceback
-import unicodedata
-import random
+import argparse, json, os, random, sys, time, pathlib, signal, re
 from datetime import datetime
-from pathlib import Path
-
-# Third-party imports
-try:
-    from bs4 import BeautifulSoup
-    from dotenv import load_dotenv
-except ImportError as e:
-    print(f"❌ Falta dependencia: {e}")
-    sys.exit(1)
+from typing import List, Dict, Tuple, Optional
 
 # Selenium
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException
-    from selenium.webdriver.chrome.service import Service
-    HAS_SELENIUM = True
-except ImportError:
-    HAS_SELENIUM = False
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-try:
-    from webdriver_manager.chrome import ChromeDriverManager
-    HAS_WEBDRIVER_MANAGER = True
-except ImportError:
-    HAS_WEBDRIVER_MANAGER = False
 
-BASE = "https://www.flowagility.com"
-SCRIPT_DIR = Path(__file__).resolve().parent
+# ------------------------ Utilidades ENV/CLI ------------------------
 
-# ENV
-try:
-    load_dotenv(SCRIPT_DIR / ".env")
-except Exception:
-    pass
+def getenv_int(name: str, default: int) -> int:
+    v = os.getenv(name, str(default)).strip()
+    try:
+        return int(v)
+    except Exception:
+        return default
 
-FLOW_EMAIL = os.getenv("FLOW_EMAILRQ", "")
-FLOW_PASS  = os.getenv("FLOW_PASSRQ",  "")
+def getenv_float(name: str, default: float) -> float:
+    v = os.getenv(name, str(default)).strip()
+    try:
+        return float(v)
+    except Exception:
+        return default
 
-HEADLESS          = os.getenv("HEADLESS", "true").lower() == "true"
-INCOGNITO         = os.getenv("INCOGNITO", "true").lower() == "true"
-OUT_DIR           = os.getenv("OUT_DIR", "./output")
-LIMIT_EVENTS      = int(os.getenv("LIMIT_EVENTS", "0"))    # 0 = sin límite
-PER_EVENT_MAX_S   = int(os.getenv("PER_EVENT_MAX_S", "180"))
-PER_PAGE_MAX_S    = int(os.getenv("PER_PAGE_MAX_S",  "35"))
-MAX_RUNTIME_MIN   = int(os.getenv("MAX_RUNTIME_MIN", "0")) # 0 = sin tope global
+def getenv_str(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return v if v is not None else default
 
-def log(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-def slow(min_s=0.5, max_s=1.2): time.sleep(random.uniform(min_s, max_s))
+def parse_args():
+    p = argparse.ArgumentParser(description="Scraper de participantes (chunking + límites + Selenium real)")
+    p.add_argument("--chunk-size", type=int, default=None, help="Tamaño de tanda (por defecto: env CHUNK_SIZE o 50)")
+    p.add_argument("--chunk-offset", type=int, default=None, help="Offset de tanda (por defecto: env CHUNK_OFFSET o 0)")
+    p.add_argument("--limit-events", type=int, default=None, help="Limitar nº de eventos (0 = sin límite)")
+    p.add_argument("--max-runtime-min", type=int, default=None, help="Tiempo máx. global (min) para cortar ordenadamente")
+    return p.parse_args()
 
-def _clean(s: str) -> str:
-    if not s: return ""
-    s = unicodedata.normalize("NFKC", str(s))
-    s = re.sub(r"[ \t]+", " ", s)
-    return s.strip()
 
-def _now(): return time.time()
-def _deadline(sec): return _now() + max(0, sec)
-def _time_left(dline): return max(0.0, dline - _now())
+# ------------------------ Carga de eventos ------------------------
 
-def _get_driver(headless=True):
-    if not HAS_SELENIUM:
-        raise ImportError("Selenium no instalado")
+def load_events(path: pathlib.Path) -> List[dict]:
+    if not path.exists():
+        raise FileNotFoundError(f"No existe {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "events" in data:
+        events = data["events"]
+    else:
+        events = data
+    if not isinstance(events, list):
+        raise ValueError("01events.json no es lista ni dict con 'events'")
+    return events
 
+def pick_event_id(ev: dict) -> str:
+    for k in ("uuid","id","event_id","slug","code"):
+        if isinstance(ev, dict) and k in ev and ev[k]:
+            return str(ev[k])
+    t = None
+    for k in ("title","name"):
+        if isinstance(ev, dict) and k in ev and ev[k]:
+            t = str(ev[k])
+            break
+    if not t:
+        t = str(ev)[:32]
+    return "".join(c for c in t if c.isalnum() or c in ("-","_"))[:48] or f"event_{int(time.time())}"
+
+def pick_event_title(ev: dict) -> str:
+    for k in ("title","name"):
+        if isinstance(ev, dict) and k in ev and ev[k]:
+            return str(ev[k])
+    return pick_event_id(ev)
+
+def pick_participants_url(ev: dict) -> Optional[str]:
+    # Intenta varias claves razonables
+    for k in ("participants_url", "participants_list"):
+        u = ev.get(k)
+        if u: return str(u)
+    # Fallback desde event_url/url + sufijo
+    base = ev.get("event_url") or ev.get("url")
+    if base:
+        suffix = getenv_str("FLOW_PARTS_URL_SUFFIX", "/participants_list")
+        return str(base).rstrip("/") + suffix
+    return None
+
+
+# ------------------------ Selenium helpers ------------------------
+
+def build_driver(headless: bool = True) -> webdriver.Chrome:
     opts = Options()
-    if headless: opts.add_argument("--headless=new")
-    if INCOGNITO: opts.add_argument("--incognito")
+    if headless:
+        opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--disable-extensions")
-    opts.add_argument("--disable-infobars")
-    opts.add_argument("--disable-browser-side-navigation")
-    opts.add_argument("--disable-features=VizDisplayCompositor")
-    opts.add_argument("--ignore-certificate-errors")
     opts.add_argument("--window-size=1920,1080")
-    ua = os.getenv("CHROME_UA", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    opts.add_argument(f"--user-agent={ua}")
+    opts.add_argument("--disable-gpu")
+    # Evitar “automation” banners
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option('useAutomationExtension', False)
+    opts.add_experimental_option("useAutomationExtension", False)
 
-    chrome_bin = os.getenv("CHROME_BIN")
-    if chrome_bin and os.path.exists(chrome_bin):
-        opts.binary_location = chrome_bin
-
+    # Si chromedriver está en PATH, Selenium lo encuentra. Si no, se puede usar webdriver_manager
     try:
-        chromedriver_path = None
-        for path in ["/usr/local/bin/chromedriver", "/usr/bin/chromedriver", "/snap/bin/chromedriver"]:
-            if os.path.exists(path):
-                chromedriver_path = path; break
-        if not chromedriver_path and HAS_WEBDRIVER_MANAGER:
-            chromedriver_path = ChromeDriverManager().install()
+        drv = webdriver.Chrome(options=opts)
+        return drv
+    except WebDriverException as e:
+        # Fallback a webdriver_manager si hiciera falta en entorno local
+        from webdriver_manager.chrome import ChromeDriverManager
+        drv = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
+        return drv
 
-        if chromedriver_path:
-            service = Service(executable_path=chromedriver_path)
-            driver = webdriver.Chrome(service=service, options=opts)
-        else:
-            driver = webdriver.Chrome(options=opts)
 
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        driver.set_page_load_timeout(75)
-        driver.implicitly_wait(2)
-        return driver
-    except Exception as e:
-        log(f"Error creando driver: {e}")
-        traceback.print_exc()
-        return None
+def selenium_get(driver: webdriver.Chrome, url: str, timeout: int = 30):
+    driver.set_page_load_timeout(timeout)
+    driver.get(url)
 
-def _login(driver):
-    if not driver: return False
+
+def wait_css(driver: webdriver.Chrome, css: str, timeout: int = 20):
+    return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, css)))
+
+
+def element_exists(driver: webdriver.Chrome, css: str) -> bool:
     try:
-        driver.get(f"{BASE}/user/login")
-        WebDriverWait(driver, 45).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        slow(1.2, 2.2)
-        if "/user/login" not in driver.current_url:
-            log("Ya autenticado"); return True
-
-        # Campos
-        email_sel = [(By.NAME,"user[email]"), (By.ID,"user_email"), (By.CSS_SELECTOR,"input[type='email']")]
-        pass_sel  = [(By.NAME,"user[password]"), (By.ID,"user_password"), (By.CSS_SELECTOR,"input[type='password']")]
-        btn_sel   = [(By.CSS_SELECTOR,'button[type="submit"]'),
-                     (By.XPATH,"//button[contains(text(),'Sign') or contains(text(),'Log') or contains(text(),'Iniciar')]")]
-
-        email = None
-        for s in email_sel:
-            try: email = WebDriverWait(driver,10).until(EC.element_to_be_clickable(s)); break
-            except: pass
-        if not email: log("No email field"); return False
-
-        pwd = None
-        for s in pass_sel:
-            try: pwd = driver.find_element(*s); break
-            except: pass
-        if not pwd: log("No password field"); return False
-
-        btn = None
-        for s in btn_sel:
-            try: btn = driver.find_element(*s); break
-            except: pass
-        if not btn: log("No submit button"); return False
-
-        if not FLOW_EMAIL or not FLOW_PASS:
-            log("❌ Faltan credenciales FLOW_EMAIL/FLOW_PASS"); return False
-
-        email.clear(); email.send_keys(FLOW_EMAIL); slow(0.3,0.6)
-        pwd.clear();   pwd.send_keys(FLOW_PASS);    slow(0.3,0.6)
-        btn.click()
-
-        WebDriverWait(driver, 40).until(lambda d: "/user/login" not in d.current_url)
-        slow(1.0, 1.8)
-        log("✅ Login correcto")
+        driver.find_element(By.CSS_SELECTOR, css)
         return True
-    except TimeoutException:
-        log("❌ Timeout en login"); return False
-    except Exception as e:
-        log(f"❌ Error en login: {e}"); return False
-
-def _accept_cookies(driver):
-    try:
-        sels = [
-            'button[aria-label="Accept all"]',
-            'button[aria-label="Aceptar todo"]',
-            '[data-testid="uc-accept-all-button"]',
-            'button[mode="primary"]',
-        ]
-        for css in sels:
-            btns = driver.find_elements(By.CSS_SELECTOR, css)
-            if btns:
-                btns[0].click(); slow(0.2, 0.4); return True
-        # Fallback JS
-        driver.execute_script("""
-            for (const b of document.querySelectorAll('button')) {
-              if (/aceptar|accept|consent|agree/i.test(b.textContent)) { b.click(); break; }
-            }
-        """)
-        slow(0.2,0.3)
-        return True
-    except Exception:
+    except NoSuchElementException:
         return False
 
-def _wait_state_participants_page(driver, timeout_s):
-    """Determina estado de la página de participantes."""
-    t_end = _deadline(timeout_s)
-    did_scroll = False
-    while _now() < t_end:
-        url = (driver.current_url or "")
-        if "/user/login" in url: return "login"
-        # Conteo rápido en DOM vivo
-        try:
-            cnt = driver.execute_script("""
-                const qs = document.querySelectorAll(
-                  '[phx-value-booking_id],'+
-                  '[phx-value-booking-id],'+
-                  '[data-phx-value-booking_id],'+
-                  '[data-phx-value-booking-id],'+
-                  '[phx-click*="booking_details"],'+
-                  '[data-phx-click*="booking_details"],'+
-                  '[id^="booking-"],[id^="booking_"]'
-                );
-                return qs ? qs.length : 0;
-            """) or 0
-            if int(cnt) > 0: return "ok"
-        except: pass
 
-        # Texto de vacío
-        try:
-            body_txt = driver.find_element(By.TAG_NAME, "body").text.lower()
-            if re.search(r"no hay|sin participantes|no results|0 participantes|no participants", body_txt):
-                return "empty"
-        except: pass
+# ------------------------ Login ------------------------
 
-        # Micro-scroll
-        if not did_scroll:
-            try:
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(0.25)
-                driver.execute_script("window.scrollTo(0, 0);")
-                did_scroll = True
-            except: pass
+def perform_login(driver: webdriver.Chrome) -> bool:
+    """
+    Realiza login si FLOW_EMAIL/FLOW_PASS están definidos.
+    Devuelve True si considera que hay sesión abierta (o no es necesario).
+    """
+    email = getenv_str("FLOW_EMAIL", "").strip()
+    pw = getenv_str("FLOW_PASS", "").strip()
+    base = getenv_str("FLOW_BASE_URL", "https://flowagility.com").rstrip("/")
+    login_url = getenv_str("FLOW_LOGIN_URL", base + "/login")
 
-        time.sleep(0.25)
-    return "timeout"
+    # Si no tenemos credenciales, asumimos que no hace falta login
+    if not email or not pw:
+        print("[INFO] Sin credenciales → se asume acceso público.", flush=True)
+        return True
 
-def _count_participants_fast(driver) -> int:
+    print(f"[INFO] Login en {login_url} (headless={getenv_str('HEADLESS','true')})", flush=True)
+
     try:
-        result = driver.execute_script("""
-            const set = new Set();
-            const nodes = document.querySelectorAll(
-              '[phx-value-booking_id],'+
-              '[phx-value-booking-id],'+
-              '[data-phx-value-booking_id],'+
-              '[data-phx-value-booking-id],'+
-              '[phx-click*="booking_details"],'+
-              '[data-phx-click*="booking_details"],'+
-              '[id^="booking-"],[id^="booking_"]'
-            );
-            for (const n of nodes) {
-              const v = n.getAttribute('phx-value-booking_id')
-                      || n.getAttribute('phx-value-booking-id')
-                      || n.getAttribute('data-phx-value-booking_id')
-                      || n.getAttribute('data-phx-value-booking-id')
-                      || n.id || '';
-              if (v) set.add(v);
-            }
-            return set.size || nodes.length || 0;
-        """) or 0
-        return int(result) if result else 0
-    except Exception:
-        return 0
+        selenium_get(driver, login_url, timeout=30)
+    except TimeoutException:
+        print("[WARN] Timeout cargando login; sigo e intento localizar formulario…", flush=True)
 
-def _count_participants_from_html(html: str) -> int:
+    sel_email = getenv_str("FLOW_SELECTOR_EMAIL", "input[name='email']")
+    sel_pass = getenv_str("FLOW_SELECTOR_PASSWORD", "input[name='password']")
+    sel_btn  = getenv_str("FLOW_SELECTOR_LOGIN_BTN", "button[type='submit']")
+    sel_check= getenv_str("FLOW_SELECTOR_LOGIN_CHECK", "a[href*='/logout']")
+
     try:
-        soup = BeautifulSoup(html, 'html.parser')
-        elems = soup.find_all(attrs={'phx-value-booking_id': True}) \
-              + soup.find_all(attrs={'phx-value-booking-id': True})
-        if elems: return len(elems)
+        wait_css(driver, sel_email, 20)
+        driver.find_element(By.CSS_SELECTOR, sel_email).clear()
+        driver.find_element(By.CSS_SELECTOR, sel_email).send_keys(email)
 
-        elems = soup.find_all(attrs={'phx-click': re.compile(r'booking_details')}) \
-              + soup.find_all(attrs={'data-phx-click': re.compile(r'booking_details')})
-        if elems: return len(elems)
+        wait_css(driver, sel_pass, 10)
+        driver.find_element(By.CSS_SELECTOR, sel_pass).clear()
+        driver.find_element(By.CSS_SELECTOR, sel_pass).send_keys(pw)
 
-        for table in soup.find_all('table'):
-            rows = table.find_all('tr')
-            if len(rows) > 1:
-                hdr = rows[0].get_text(" ").lower()
-                if any(k in hdr for k in ["dorsal","guía","guia","perro","nombre"]):
-                    return max(0, len(rows)-1)
-                if 5 <= len(rows) <= 2000:
-                    return len(rows)-1
+        driver.find_element(By.CSS_SELECTOR, sel_btn).click()
 
-        txt = soup.get_text(" ").lower()
-        m = re.search(r"(\d+)\s*(participantes?|inscritos?|competidores?)", txt)
-        if m:
-            n = int(m.group(1))
-            if 0 <= n <= 5000: return n
-    except Exception:
-        pass
-    return 0
+        # Espera a que aparezca un indicador de login (o redirección)
+        WebDriverWait(driver, 25).until(lambda d: element_exists(d, sel_check) or d.current_url != login_url)
+        print("[INFO] Login correcto (o navegación tras enviar formulario).", flush=True)
+        return True
+    except Exception as e:
+        print(f"[ERROR] Fallo en login: {e}", flush=True)
+        # Aun así, no abortamos: quizá la página era pública
+        return element_exists(driver, sel_check)
+
+
+# ------------------------ Extracción de participantes ------------------------
+
+def header_slugify(h: str) -> str:
+    """
+    Normaliza el nombre de columna a un alias estable:
+    p.ej. 'Nº Licencia' -> 'licencia', 'Guía' -> 'guia', 'Perro' -> 'perro'
+    """
+    s = (h or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    rep = {
+        "nº": "n",
+        "núm.": "num",
+        "número": "numero",
+        "guía": "guia",
+        "perr@": "perro",
+        "perr€": "perro",
+        "raza/size": "raza",
+        "tamaño": "altura",
+        "talla": "altura",
+        "grade": "grado",
+    }
+    for k, v in rep.items():
+        s = s.replace(k, v)
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    # Mapas comunes a tus datasets
+    alias = {
+        "binomid": "BinomID",
+        "binom_id": "BinomID",
+        "dorsal": "Dorsal",
+        "guia": "guia",
+        "perro": "perro",
+        "raza": "Raza",
+        "altura": "Altura",
+        "edad": "Edad",
+        "genero": "Género",
+        "sexo": "Género",
+        "club": "Club",
+        "licencia": "Licencia",
+        "federacion": "Federación",
+        "fed": "Federación",
+        "pais": "País",
+        "equipo": "Equipo",
+        "grado": "Grado",
+        "nombre_de_pedigree": "Nombre de Pedigree",
+        "nombre_pedigree": "Nombre de Pedigree",
+        "vel_media": "Vel_media",
+    }
+    return alias.get(s, s)
+
+
+def extract_table(driver: webdriver.Chrome) -> Tuple[List[Dict], List[str]]:
+    """
+    Extrae cabeceras + filas de la tabla de participantes visible en la página actual.
+    Usa selectores configurables (ENV) y devuelve (rows, headers_norm).
+    """
+    sel_table = getenv_str("FLOW_SELECTOR_PARTS_TABLE", "table")
+    sel_thead = getenv_str("FLOW_SELECTOR_PARTS_THEAD", "thead tr th")
+    sel_rows  = getenv_str("FLOW_SELECTOR_PARTS_ROWS", "tbody tr")
+    sel_cells = getenv_str("FLOW_SELECTOR_PARTS_CELLS", "td")
+
+    wait_css(driver, sel_table, 30)
+    # Tomamos cabeceras
+    headers_raw = [th.text.strip() for th in driver.find_elements(By.CSS_SELECTOR, sel_thead)]
+    headers = [header_slugify(h) for h in headers_raw]
+    # Si no hay thead, intentar inferir desde primera fila
+    if not headers:
+        first_row = driver.find_elements(By.CSS_SELECTOR, sel_rows)[:1]
+        if first_row:
+            n = len(first_row[0].find_elements(By.CSS_SELECTOR, sel_cells))
+            headers = [f"col_{i+1}" for i in range(n)]
+
+    out = []
+    for tr in driver.find_elements(By.CSS_SELECTOR, sel_rows):
+        tds = tr.find_elements(By.CSS_SELECTOR, sel_cells)
+        if not tds:
+            continue
+        values = [td.text.strip() for td in tds]
+        # Alinear longitudes
+        if len(values) < len(headers):
+            values += [""] * (len(headers) - len(values))
+        elif len(values) > len(headers):
+            values = values[:len(headers)]
+        row = dict(zip(headers, values))
+        out.append(row)
+
+    return out, headers
+
+
+def to_participants_schema(rows: List[Dict], event_id: str, event_title: str) -> List[Dict]:
+    """
+    Mapea las columnas genéricas a tu esquema de salida estándar.
+    Si faltan algunas, las deja vacías.
+    """
+    out = []
+    for r in rows:
+        out.append({
+            "event_id": event_id,
+            "event_title": event_title,
+            "BinomID": r.get("BinomID") or r.get("binomid") or r.get("binom_id") or "",
+            "Dorsal": r.get("Dorsal") or r.get("dorsal") or "",
+            "guia": r.get("guia") or r.get("Guia") or "",
+            "perro": r.get("perro") or r.get("Perro") or "",
+            "Raza": r.get("Raza") or r.get("raza") or "",
+            "Edad": r.get("Edad") or r.get("edad") or "",
+            "Género": r.get("Género") or r.get("genero") or r.get("sexo") or "",
+            "Altura": r.get("Altura") or r.get("altura") or r.get("talla") or "",
+            "Nombre de Pedigree": r.get("Nombre de Pedigree") or r.get("nombre_de_pedigree") or "",
+            "País": r.get("País") or r.get("pais") or "",
+            "Licencia": r.get("Licencia") or r.get("licencia") or "",
+            "Club": r.get("Club") or r.get("club") or "",
+            "Federación": r.get("Federación") or r.get("federacion") or r.get("fed") or "",
+            "Equipo": r.get("Equipo") or r.get("equipo") or "",
+            "Grado": r.get("Grado") or r.get("grado") or "",
+        })
+    return out
+
+
+# ------------------------ Scrape por evento ------------------------
+
+def scrape_participants_for_event(
+    driver: webdriver.Chrome,
+    ev: dict,
+    per_event_max_s: int = 360
+) -> Tuple[List[Dict], Dict]:
+    """
+    Abre la URL de participantes de un evento y extrae todos los registros visibles.
+    """
+    t0 = time.time()
+    event_id = pick_event_id(ev)
+    event_title = pick_event_title(ev)
+    parts_url = pick_participants_url(ev)
+
+    if not parts_url:
+        raise RuntimeError("No se pudo derivar participants_url para el evento.")
+
+    print(f"[INFO] URL participantes: {parts_url}", flush=True)
+
+    # Cargar página
+    try:
+        selenium_get(driver, parts_url, timeout=min(60, per_event_max_s))
+    except TimeoutException:
+        print("[WARN] Timeout cargando lista; aún así intento leer tabla si está presente…", flush=True)
+
+    # Si hay controles como "Mostrar X por página" o paginación:
+    # - Este código sólo extrae la tabla visible. Si hay paginación, puedes:
+    #   1) Subir "mostrar 1000 por página" si existe
+    #   2) Iterar paginación (selector ENV) y concatenar
+    # Para mantenerlo general, aquí extraemos la tabla actual.
+
+    rows, headers = extract_table(driver)
+    participants = to_participants_schema(rows, event_id, event_title)
+
+    dbg = {
+        "event_id": event_id,
+        "event_title": event_title,
+        "participants_url": parts_url,
+        "headers_detected": headers,
+        "count": len(participants),
+        "duration_s": round(time.time() - t0, 2),
+    }
+    return participants, dbg
+
+
+# ------------------------ Main ------------------------
 
 def main():
-    print("🚀 MÓDULO 2: EXTRAER PARTICIPANTES")
-    print(f"📂 OUT_DIR: {OUT_DIR}")
-    os.makedirs(OUT_DIR, exist_ok=True)
-    per_event_dir = Path(OUT_DIR) / "participants"
-    per_event_dir.mkdir(parents=True, exist_ok=True)
+    args = parse_args()
 
-    events_path = Path(OUT_DIR) / "01events.json"
-    if not events_path.exists():
-        log("❌ No existe ./output/01events.json. Ejecuta primero el Módulo 1.")
-        return False
+    # Parámetros
+    chunk_size      = args.chunk_size      if args.chunk_size      is not None else getenv_int("CHUNK_SIZE", 50)
+    chunk_offset    = args.chunk_offset    if args.chunk_offset    is not None else getenv_int("CHUNK_OFFSET", 0)
+    limit_events    = args.limit_events    if args.limit_events    is not None else getenv_int("LIMIT_EVENTS", 0)
+    max_runtime_min = args.max_runtime_min if args.max_runtime_min is not None else getenv_int("MAX_RUNTIME_MIN", 55)
 
-    events = json.load(open(events_path, "r", encoding="utf-8"))
-    if LIMIT_EVENTS > 0:
-        events = events[:LIMIT_EVENTS]
+    dbg_mode = getenv_int("DEBUG_PARTICIPANTS", 0) == 1
 
-    driver = _get_driver(headless=HEADLESS)
-    if not driver:
-        log("❌ No se pudo crear el driver de Chrome"); return False
+    throttle_event_s_min = getenv_float("THROTTLE_EVENT_S_MIN", 8.0)
+    throttle_event_s_max = getenv_float("THROTTLE_EVENT_S_MAX", 14.0)
+    per_event_max_s      = getenv_int("PER_EVENT_MAX_S", 360)
+
+    out_dir = pathlib.Path(getenv_str("OUT_DIR", "./output"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "participants").mkdir(parents=True, exist_ok=True)
+
+    # Cargar eventos
+    events = load_events(out_dir / "01events.json")
+    total_events = len(events)
+    print(f"[INFO] Total eventos en 01events.json: {total_events}")
+
+    # Slice por chunk
+    if chunk_size and chunk_size > 0:
+        start = max(0, chunk_offset)
+        end = min(total_events, start + chunk_size)
+    else:
+        start, end = 0, total_events
+
+    events_slice = events[start:end]
+    print(f"[INFO] Procesando slice [{start}:{end}] → {len(events_slice)} eventos")
+
+    # Limit opcional
+    if limit_events and limit_events > 0:
+        events_slice = events_slice[:limit_events]
+        print(f"[INFO] Aplicado limit_events={limit_events} → {len(events_slice)} eventos")
+
+    # Debug → fuerza 2
+    if dbg_mode:
+        events_slice = events_slice[:2]
+        print("[DEBUG] DEBUG_PARTICIPANTS=1 → forzando 2 eventos")
+
+    # Corte global
+    t_global = time.time()
+    deadline = t_global + max_runtime_min * 60
+
+    # Señales corte ordenado
+    stop = {"flag": False}
+    def handler(sig, frame):
+        print(f"[WARN] Señal {sig} → corte ordenado…", flush=True)
+        stop["flag"] = True
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+
+    headless = getenv_str("HEADLESS", "true").lower() == "true"
+    driver = build_driver(headless=headless)
+
+    all_participants: List[Dict] = []
+    per_event_debug: List[Dict] = []
 
     try:
-        if not _login(driver):
-            raise RuntimeError("No se pudo iniciar sesión")
+        # Login si procede
+        if not perform_login(driver):
+            print("[WARN] No se pudo verificar login. Intento continuar en público…", flush=True)
 
-        global_deadline = _deadline(MAX_RUNTIME_MIN * 60) if MAX_RUNTIME_MIN > 0 else None
-        results = []
-
-        total = len(events)
-        for idx, ev in enumerate(events, 1):
-            if global_deadline and _now() >= global_deadline:
-                log("⏹️  Tiempo global agotado; guardo y salgo.")
+        for idx, ev in enumerate(events_slice, 1):
+            if stop["flag"] or time.time() >= deadline:
+                print("[INFO] Tiempo agotado o corte solicitado. Salgo del bucle.", flush=True)
                 break
 
-            nombre = ev.get("nombre","N/A")
-            eid    = ev.get("id","")
-            plist  = (ev.get("enlaces") or {}).get("participantes","")
-            if not plist:
-                log(f"({idx}/{total}) {nombre}: sin URL de participantes; salto.")
-                continue
-
-            log(f"({idx}/{total}) {nombre}: accediendo a participantes…")
-            event_deadline = _deadline(PER_EVENT_MAX_S)
-            status = "error"; n = 0
+            event_id = pick_event_id(ev)
+            event_title = pick_event_title(ev)
+            print(f"[INFO] ({idx}/{len(events_slice)}) {event_title} [{event_id}]", flush=True)
 
             try:
-                driver.get(plist)
-                WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                _accept_cookies(driver)
-
-                state = _wait_state_participants_page(driver, timeout_s=min(PER_PAGE_MAX_S, _time_left(event_deadline)))
-
-                if state == "login":
-                    log("  Sesión caducada; relogin…")
-                    if _login(driver):
-                        driver.get(plist)
-                        WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                        _accept_cookies(driver)
-                        state = _wait_state_participants_page(driver, timeout_s=min(PER_PAGE_MAX_S, _time_left(event_deadline)))
-                    else:
-                        state = "timeout"
-
-                if state == "empty":
-                    status = "empty"; n = 0; log("  Lista vacía (empty)")
-                elif state == "ok":
-                    n = _count_participants_fast(driver)
-                    if n == 0:
-                        n = _count_participants_from_html(driver.page_source)
-                    status = "ok" if n > 0 else "empty"
-                    log(f"  Conteo participantes: {n}")
-                else:
-                    status = "timeout"; n = 0; log("  Timeout esperando lista")
+                participants, dbg = scrape_participants_for_event(
+                    driver, ev, per_event_max_s=per_event_max_s
+                )
             except Exception as e:
-                status = "error"; n = 0; log(f"  Error en participantes: {e}")
+                print(f"[ERROR] Evento {event_id} → {e}", file=sys.stderr, flush=True)
+                participants, dbg = [], {
+                    "event_id": event_id,
+                    "event_title": event_title,
+                    "error": str(e),
+                }
 
-            record = {
-                "id": eid,
-                "nombre": nombre,
-                "participants_url": plist,
-                "numero_participantes": int(n),
-                "estado": status,
-                "timestamp": datetime.now().isoformat()
-            }
-            results.append(record)
+            # Guardado por evento
+            per_event_path = out_dir / "participants" / f"02p_{event_id}.json"
+            try:
+                per_event_path.write_text(json.dumps(participants, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                print(f"[ERROR] Escribiendo {per_event_path}: {e}", file=sys.stderr, flush=True)
 
-            # Guardar por evento
-            per_path = per_event_dir / f"02p_{eid or idx}.json"
-            with open(per_path, "w", encoding="utf-8") as f: json.dump(record, f, ensure_ascii=False, indent=2)
-            slow(0.3, 0.8)
+            all_participants.extend(participants)
+            per_event_debug.append(dbg)
 
-        # Guardar agregado
-        out_all = Path(OUT_DIR) / "02participants.json"
-        with open(out_all, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
+            # Throttle entre eventos
+            if idx < len(events_slice):
+                sleep_s = random.uniform(throttle_event_s_min, throttle_event_s_max)
+                if time.time() + sleep_s < deadline:
+                    time.sleep(sleep_s)
 
-        # Resumen
-        total_ok = sum(1 for r in results if r["estado"] == "ok")
-        total_n  = sum(r["numero_participantes"] for r in results)
-        log(f"✅ Guardado {len(results)} registros | {total_ok} OK | total participantes: {total_n}")
-        return True
-
-    except Exception as e:
-        log(f"❌ Error global: {e}")
-        traceback.print_exc()
-        return False
     finally:
-        try: driver.quit()
-        except: pass
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    # Guardados globales
+    out_json = out_dir / "02participants.json"
+    out_dbg  = out_dir / "02participants_debug.json"
+
+    try:
+        out_json.write_text(json.dumps(all_participants, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[INFO] Escrito {out_json} ({len(all_participants)} participantes)", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Escribiendo {out_json}: {e}", file=sys.stderr, flush=True)
+
+    try:
+        meta = {
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "total_events_input": total_events,
+            "slice_start": start,
+            "slice_end": end,
+            "limit_events": limit_events,
+            "debug_mode": dbg_mode,
+            "max_runtime_min": max_runtime_min,
+            "per_event": per_event_debug
+        }
+        out_dbg.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[INFO] Escrito {out_dbg}", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Escribiendo {out_dbg}: {e}", file=sys.stderr, flush=True)
+
+    print("[OK] Finalizado.", flush=True)
+
 
 if __name__ == "__main__":
-    sys.exit(0 if main() else 1)
+    main()
