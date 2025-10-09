@@ -51,7 +51,7 @@ except ImportError:
 # ============================== CONFIGURACIÓN GLOBAL ==============================
 
 BASE = "https://www.flowagility.com"
-EVENTS_URL = f"{BASE}/zone/events/past"
+EVENTS_URL = f"{BASE}/zone/events"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Cargar variables de entorno
