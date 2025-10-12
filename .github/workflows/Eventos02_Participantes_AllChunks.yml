@@ -3,8 +3,6 @@ name: Eventos02_Participantes_AllChunks
 on:
   schedule:
     - cron: '5 3 * * *'   # 03:05 UTC → offset 0
-    - cron: '5 4 * * *'   # 04:05 UTC → offset 50
-    - cron: '5 5 * * *'   # 05:05 UTC → offset 100
   workflow_dispatch:
     inputs:
       chunk_size:
