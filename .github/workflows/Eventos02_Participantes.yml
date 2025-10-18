@@ -114,8 +114,8 @@ jobs:
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
           echo "=== MÓDULO 2: PARTICIPANTES (FULL) ==="
-          # Script v4.x que te pasé: flow_participants_debug.py
-          python ./flow_participants_debug.py
+          # Script v4.x que te pasé: flow_participants_DeepSek.py
+          python ./flow_participants_DeepSek.py
           echo "=== FIN MÓDULO 2 ==="
           ls -la ./output || true
           ls -la ./output/participants || true
