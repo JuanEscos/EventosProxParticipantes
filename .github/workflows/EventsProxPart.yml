@@ -145,11 +145,9 @@ jobs:
       - name: Validate gz files
         run: |
           set -e
-          # test gzip integrity
           [ -f output/01events.json.gz ] && gzip -t output/01events.json.gz
           [ -f output/02participants.json.gz ] && gzip -t output/02participants.json.gz
 
-          # test that JSON inside gz is parseable
           python - <<'PY'
           import gzip, json, pathlib, sys
           p = pathlib.Path("output/02participants.json.gz")
@@ -162,7 +160,7 @@ jobs:
           print("✅ GZ OK, participantes:", len(data))
           PY
 
-      - name: Upload to FTP (gz only, ATOMIC)
+      - name: Upload to FTP (gz only, robust)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
@@ -178,52 +176,33 @@ jobs:
           BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
           echo "Subiendo a: ${BASE_URL}/"
 
-          upload_atomic() {
-            local SRC="$1"
-            local DST="$2"
-            local TMP="${DST}.tmp"
-
+          upload() {
+            local SRC="$1" DST="$2"
             for i in 1 2 3; do
-              echo "Subiendo (tmp) ${SRC} -> ${TMP}"
+              echo "Subiendo ${SRC} -> ${DST}"
               if curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
                    --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
                    --upload-file "$SRC" \
-                   "${BASE_URL}/${TMP}"; then
-
-                echo "Renombrando ${TMP} -> ${DST}"
-                # Borrar destino si existe + renombrar tmp -> final
-                if curl --fail --ssl-reqd --disable-epsv --ftp-skip-pasv-ip \
-                     --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
-                     --quote "DELE ${DST}" \
-                     --quote "RNFR ${TMP}" \
-                     --quote "RNTO ${DST}" \
-                     "${BASE_URL}/"; then
-                  return 0
-                fi
-
-                echo "⚠️ Rename falló (intento $i). Reintentando…"
-              else
-                echo "Reintento $i falló subiendo ${SRC} -> ${TMP}; esperando…"
+                   "${BASE_URL}/${DST}"; then
+                return 0
               fi
+              echo "Reintento $i falló subiendo ${SRC} → ${DST}; esperando…"
               sleep 3
             done
-
-            echo "❌ Fallo subiendo atómicamente ${SRC} -> ${DST}"
+            echo "❌ Fallo subiendo ${SRC} → ${DST}"
             return 1
           }
 
-          # 01events (nuevo)
-          [ -f "./output/01events.json.gz" ] && upload_atomic "./output/01events.json.gz" "01events.json.gz"
-
-          # Agregados de participantes
-          [ -f "./output/02participants.json.gz" ]       && upload_atomic "./output/02participants.json.gz"       "02participants.json.gz"
-          [ -f "./output/02participants_debug.json.gz" ] && upload_atomic "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
+          # Agregados
+          [ -f "./output/01events.json.gz" ] && upload "./output/01events.json.gz" "01events.json.gz"
+          [ -f "./output/02participants.json.gz" ] && upload "./output/02participants.json.gz" "02participants.json.gz"
+          [ -f "./output/02participants_debug.json.gz" ] && upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
 
           # Por evento
           shopt -s nullglob
           for f in ./output/participants/02p_*.json.gz; do
             base=$(basename "$f")
-            upload_atomic "$f" "participants/${base}"
+            upload "$f" "participants/${base}"
           done
 
       - name: Upload artifacts (backup)
