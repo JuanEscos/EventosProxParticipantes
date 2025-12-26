@@ -26,13 +26,13 @@ jobs:
       THROTTLE_PANEL_MS_MAX: "300"
       THROTTLE_EVENT_S_MIN: "1"
       THROTTLE_EVENT_S_MAX: "3"
-      MAX_PANELS_PER_EVENT: "0"       # 0 = sin tope por evento
+      MAX_PANELS_PER_EVENT: "0"
 
       # Límites de tiempo
-      PER_EVENT_MAX_S: "0"            # 0 = sin límite por evento
-      MAX_RUNTIME_MIN: "0"            # 0 = sin límite global
+      PER_EVENT_MAX_S: "0"
+      MAX_RUNTIME_MIN: "0"
 
-      # Chunking desactivado (procesa TODOS)
+      # Chunking desactivado
       CHUNK_SIZE: "0"
       CHUNK_OFFSET: "0"
 
@@ -46,23 +46,20 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Chrome & ChromeDriver
         run: |
           set -e
           sudo apt-get update
           sudo apt-get install -y wget gnupg unzip
-
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
-
           CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
           URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
-
           if wget -q --spider "$URL"; then
             wget -O /tmp/chromedriver.zip "$URL"
             unzip -o /tmp/chromedriver.zip -d /tmp/
@@ -72,7 +69,6 @@ jobs:
             sudo apt-get install -y chromium-chromedriver
             sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
           fi
-
           which google-chrome-stable && google-chrome-stable --version
           which chromedriver && chromedriver --version
 
@@ -84,7 +80,7 @@ jobs:
       - name: Prepare output dirs
         run: mkdir -p "${OUT_DIR}" "${OUT_DIR}/participants"
 
-      # ========= MÓDULO 1: EVENTOS (SIN LÍMITE) =========
+      # ========= MÓDULO 1: EVENTOS =========
       - name: Run Module 1 (events)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
@@ -95,6 +91,7 @@ jobs:
           LIMIT_EVENTS: "0"
           OUT_DIR: "./output"
         run: |
+          set -e
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
           python ./flow_events.py --module events
           echo "=== FIN MÓDULO 1 ==="
@@ -102,6 +99,7 @@ jobs:
 
       - name: Ensure 01events.json
         run: |
+          set -e
           if [ ! -f "./output/01events.json" ]; then
             echo "❌ No se generó ./output/01events.json"
             exit 1
@@ -109,12 +107,13 @@ jobs:
           echo "✅ Encontrado 01events.json"
           ls -la ./output/01events.json
 
-      # ========= MÓDULO 2: PARTICIPANTES (FULL) =========
+      # ========= MÓDULO 2: PARTICIPANTES =========
       - name: Run Module 2 (participants, full)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
+          set -e
           echo "=== MÓDULO 2: PARTICIPANTES (FULL) ==="
           python ./flow_participants_DeepSek.py
           echo "=== FIN MÓDULO 2 ==="
@@ -123,6 +122,7 @@ jobs:
 
       - name: Sanity check JSON (plain)
         run: |
+          set -e
           python - <<'PY'
           import json, pathlib, sys
           p = pathlib.Path("output/02participants.json")
@@ -130,14 +130,11 @@ jobs:
               print("❌ 02participants.json no existe"); sys.exit(1)
           data = json.loads(p.read_text(encoding="utf-8"))
           if not isinstance(data, list):
-              raise SystemExit("❌ 02participants.json NO es una lista (array).")
-          print("✅ Total participantes:", len(data))
-          if data:
-              sample = {k: data[0].get(k) for k in ("event_id","BinomID","guia","perro","club")}
-              print("Ejemplo:", sample)
+              print("❌ 02participants.json NO es una lista"); sys.exit(1)
+          print("✅ Total participantes (plain):", len(data))
           PY
 
-      - name: Gzip outputs (incluye 01events)
+      - name: Gzip outputs
         run: |
           set -e
           for f in output/01events.json output/02participants.json output/02participants_debug.json output/participants/*.json; do
@@ -148,26 +145,29 @@ jobs:
           ls -la output/*.gz || true
           ls -la output/participants/*.gz || true
 
-      - name: Validate gz files
+      - name: Validate gz files (gzip -t + JSON parse inside)
         run: |
           set -e
+
+          # 1) Integridad gzip
           [ -f output/01events.json.gz ] && gzip -t output/01events.json.gz
           [ -f output/02participants.json.gz ] && gzip -t output/02participants.json.gz
 
+          # 2) Parseo JSON dentro del GZ (esto evita subir basura corrupta)
           python - <<'PY'
           import gzip, json, pathlib, sys
           p = pathlib.Path("output/02participants.json.gz")
           if not p.exists():
-              print("⚠️ No existe 02participants.json.gz (se omite)"); sys.exit(0)
+              print("❌ No existe output/02participants.json.gz"); sys.exit(1)
           with gzip.open(p, "rt", encoding="utf-8") as f:
               data = json.load(f)
           if not isinstance(data, list):
-              raise SystemExit("❌ El JSON dentro del GZ no es una lista (array).")
-          print("✅ GZ OK, participantes:", len(data))
+              print("❌ El JSON dentro del GZ no es una lista"); sys.exit(1)
+          print("✅ GZ OK. Participantes:", len(data))
           PY
 
-      # ========= SUBIDA FTP ROBUSTA: timestamp + latest pointer (SIN RNFR/RNTO) =========
-      - name: Upload to FTP (timestamp + latest pointer)
+      # ========= SUBIDA FTP (SIN RENOMBRE, porque tu FTP NO permite QUOT RNFR/RNTO/DELE) =========
+      - name: Upload to FTP (gz only, overwrite)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
@@ -175,7 +175,6 @@ jobs:
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
         run: |
           set -e
-
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
             echo "Variables FTP no configuradas"; exit 1
           fi
@@ -184,41 +183,34 @@ jobs:
           BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
           echo "Subiendo a: ${BASE_URL}/"
 
-          TS="$(date -u +%Y%m%dT%H%M%SZ)"
-
           upload() {
             local SRC="$1" DST="$2"
-            for i in 1 2 3; do
-              echo "Upload ${SRC} -> ${DST} (intento $i)"
-              if curl --fail --ssl-reqd --ftp-create-dirs \
+            for i in 1 2 3 4 5; do
+              echo "Upload intento $i: ${SRC} -> ${DST}"
+              if curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
                    --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
                    --upload-file "$SRC" \
                    "${BASE_URL}/${DST}"; then
+                echo "✅ OK: ${DST}"
                 return 0
               fi
+              echo "⚠️ Falló intento $i. Reintentando…"
               sleep 3
             done
             echo "❌ Fallo subiendo ${SRC} -> ${DST}"
             return 1
           }
 
-          # 01events
-          if [ -f "./output/01events.json.gz" ]; then
-            EV_FILE="01events_${TS}.json.gz"
-            upload "./output/01events.json.gz" "${EV_FILE}"
-            echo "${EV_FILE}" > ./output/01events_latest.txt
-            upload "./output/01events_latest.txt" "01events_latest.txt"
+          # Agregados
+          upload "./output/01events.json.gz"        "01events.json.gz"
+          upload "./output/02participants.json.gz"  "02participants.json.gz"
+
+          # Debug opcional
+          if [ -f "./output/02participants_debug.json.gz" ]; then
+            upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
           fi
 
-          # 02participants
-          if [ -f "./output/02participants.json.gz" ]; then
-            P_FILE="02participants_${TS}.json.gz"
-            upload "./output/02participants.json.gz" "${P_FILE}"
-            echo "${P_FILE}" > ./output/02participants_latest.txt
-            upload "./output/02participants_latest.txt" "02participants_latest.txt"
-          fi
-
-          # Por evento (se suben “tal cual”)
+          # Por evento (si existen)
           shopt -s nullglob
           for f in ./output/participants/02p_*.json.gz; do
             base=$(basename "$f")
