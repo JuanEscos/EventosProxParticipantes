@@ -36,7 +36,7 @@ jobs:
       CHUNK_SIZE: "0"
       CHUNK_OFFSET: "0"
 
-      # Debug enriquecido
+      # Debug
       DEBUG_PARTICIPANTS: "0"
 
     steps:
@@ -46,20 +46,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install Chrome & ChromeDriver
         run: |
           set -e
           sudo apt-get update
           sudo apt-get install -y wget gnupg unzip
+
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
+
           CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
           URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+
           if wget -q --spider "$URL"; then
             wget -O /tmp/chromedriver.zip "$URL"
             unzip -o /tmp/chromedriver.zip -d /tmp/
@@ -69,6 +72,7 @@ jobs:
             sudo apt-get install -y chromium-chromedriver
             sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
           fi
+
           which google-chrome-stable && google-chrome-stable --version
           which chromedriver && chromedriver --version
 
@@ -88,7 +92,7 @@ jobs:
           HEADLESS: "true"
           MAX_SCROLLS: "15"
           SCROLL_WAIT_S: "3.0"
-          LIMIT_EVENTS: "0"     # 0 = sin límite
+          LIMIT_EVENTS: "0"
           OUT_DIR: "./output"
         run: |
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
@@ -105,7 +109,7 @@ jobs:
           echo "✅ Encontrado 01events.json"
           ls -la ./output/01events.json
 
-      # ========= MÓDULO 2: PARTICIPANTES (TODOS) =========
+      # ========= MÓDULO 2: PARTICIPANTES (FULL) =========
       - name: Run Module 2 (participants, full)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
@@ -125,6 +129,8 @@ jobs:
           if not p.exists():
               print("❌ 02participants.json no existe"); sys.exit(1)
           data = json.loads(p.read_text(encoding="utf-8"))
+          if not isinstance(data, list):
+              raise SystemExit("❌ 02participants.json NO es una lista (array).")
           print("✅ Total participantes:", len(data))
           if data:
               sample = {k: data[0].get(k) for k in ("event_id","BinomID","guia","perro","club")}
@@ -156,11 +162,12 @@ jobs:
           with gzip.open(p, "rt", encoding="utf-8") as f:
               data = json.load(f)
           if not isinstance(data, list):
-              raise SystemExit("❌ El JSON dentro del GZ no es una lista")
+              raise SystemExit("❌ El JSON dentro del GZ no es una lista (array).")
           print("✅ GZ OK, participantes:", len(data))
           PY
 
-      - name: Upload to FTP (gz only, robust)
+      # ========= SUBIDA FTP ROBUSTA: timestamp + latest pointer (SIN RNFR/RNTO) =========
+      - name: Upload to FTP (timestamp + latest pointer)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
@@ -168,6 +175,7 @@ jobs:
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
         run: |
           set -e
+
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
             echo "Variables FTP no configuradas"; exit 1
           fi
@@ -176,29 +184,41 @@ jobs:
           BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
           echo "Subiendo a: ${BASE_URL}/"
 
+          TS="$(date -u +%Y%m%dT%H%M%SZ)"
+
           upload() {
             local SRC="$1" DST="$2"
             for i in 1 2 3; do
-              echo "Subiendo ${SRC} -> ${DST}"
-              if curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
+              echo "Upload ${SRC} -> ${DST} (intento $i)"
+              if curl --fail --ssl-reqd --ftp-create-dirs \
                    --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
                    --upload-file "$SRC" \
                    "${BASE_URL}/${DST}"; then
                 return 0
               fi
-              echo "Reintento $i falló subiendo ${SRC} → ${DST}; esperando…"
               sleep 3
             done
-            echo "❌ Fallo subiendo ${SRC} → ${DST}"
+            echo "❌ Fallo subiendo ${SRC} -> ${DST}"
             return 1
           }
 
-          # Agregados
-          [ -f "./output/01events.json.gz" ] && upload "./output/01events.json.gz" "01events.json.gz"
-          [ -f "./output/02participants.json.gz" ] && upload "./output/02participants.json.gz" "02participants.json.gz"
-          [ -f "./output/02participants_debug.json.gz" ] && upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
+          # 01events
+          if [ -f "./output/01events.json.gz" ]; then
+            EV_FILE="01events_${TS}.json.gz"
+            upload "./output/01events.json.gz" "${EV_FILE}"
+            echo "${EV_FILE}" > ./output/01events_latest.txt
+            upload "./output/01events_latest.txt" "01events_latest.txt"
+          fi
 
-          # Por evento
+          # 02participants
+          if [ -f "./output/02participants.json.gz" ]; then
+            P_FILE="02participants_${TS}.json.gz"
+            upload "./output/02participants.json.gz" "${P_FILE}"
+            echo "${P_FILE}" > ./output/02participants_latest.txt
+            upload "./output/02participants_latest.txt" "02participants_latest.txt"
+          fi
+
+          # Por evento (se suben “tal cual”)
           shopt -s nullglob
           for f in ./output/participants/02p_*.json.gz; do
             base=$(basename "$f")
