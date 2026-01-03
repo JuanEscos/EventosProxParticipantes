@@ -167,7 +167,7 @@ jobs:
           PY
 
       # ========= SUBIDA FTP (SIN RENOMBRE, porque tu FTP NO permite QUOT RNFR/RNTO/DELE) =========
-      - name: Upload to FTP (gz only, overwrite)
+      - name: Upload to FTP (gz only, robust with lftp)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
@@ -175,46 +175,76 @@ jobs:
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
         run: |
           set -e
+
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
             echo "Variables FTP no configuradas"; exit 1
           fi
 
-          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
-          BASE_URL="ftp://${FTP_SERVER}${REMOTE_DIR}"
-          echo "Subiendo a: ${BASE_URL}/"
+          sudo apt-get update
+          sudo apt-get install -y lftp
 
-          upload() {
-            local SRC="$1" DST="$2"
-            for i in 1 2 3 4 5; do
-              echo "Upload intento $i: ${SRC} -> ${DST}"
-              if curl --fail --ssl-reqd --ftp-create-dirs --disable-epsv --ftp-skip-pasv-ip \
-                   --user "${FTP_USERNAME}:${FTP_PASSWORD}" \
-                   --upload-file "$SRC" \
-                   "${BASE_URL}/${DST}"; then
-                echo "✅ OK: ${DST}"
-                return 0
-              fi
-              echo "⚠️ Falló intento $i. Reintentando…"
-              sleep 3
-            done
-            echo "❌ Fallo subiendo ${SRC} -> ${DST}"
-            return 1
+          REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
+          echo "Subiendo a: ${FTP_SERVER}${REMOTE_DIR}"
+
+          # Función: intenta FTPS primero, si falla, FTP sin TLS (por compatibilidad)
+          upload_one () {
+            local SRC="$1"
+            local DST="$2"
+
+            echo "==> Subiendo ${SRC} -> ${DST}"
+
+            # 1) Intento FTPS explícito (AUTH TLS)
+            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP || FTPS_FAIL=1
+set ftp:passive-mode true
+set ftp:ssl-force true
+set ftp:ssl-protect-data true
+set ssl:verify-certificate no
+set net:max-retries 5
+set net:reconnect-interval-base 3
+set net:timeout 30
+set xfer:clobber on
+cd "${REMOTE_DIR}"
+put "${SRC}" -o "${DST}"
+bye
+LFTP
+
+            if [ "${FTPS_FAIL:-0}" = "0" ]; then
+              echo "✅ OK (FTPS): ${DST}"
+              return 0
+            fi
+
+            echo "⚠️ FTPS falló; probando FTP sin TLS (fallback)…"
+
+            # 2) Fallback FTP plano
+            unset FTPS_FAIL
+            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP
+set ftp:passive-mode true
+set ftp:ssl-force false
+set ftp:ssl-protect-data false
+set net:max-retries 5
+set net:reconnect-interval-base 3
+set net:timeout 30
+set xfer:clobber on
+cd "${REMOTE_DIR}"
+put "${SRC}" -o "${DST}"
+bye
+LFTP
+
+            echo "✅ OK (FTP): ${DST}"
           }
 
-          # Agregados
-          upload "./output/01events.json.gz"        "01events.json.gz"
-          upload "./output/02participants.json.gz"  "02participants.json.gz"
+          # Subidas (solo .gz)
+          [ -f "./output/01events.json.gz" ]        && upload_one "./output/01events.json.gz"        "01events.json.gz"
+          [ -f "./output/02participants.json.gz" ]  && upload_one "./output/02participants.json.gz"  "02participants.json.gz"
 
-          # Debug opcional
           if [ -f "./output/02participants_debug.json.gz" ]; then
-            upload "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
+            upload_one "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
           fi
 
-          # Por evento (si existen)
           shopt -s nullglob
           for f in ./output/participants/02p_*.json.gz; do
             base=$(basename "$f")
-            upload "$f" "participants/${base}"
+            upload_one "$f" "participants/${base}"
           done
 
       - name: Upload artifacts (backup)
