@@ -89,7 +89,7 @@ jobs:
           HEADLESS: "true"
           MAX_SCROLLS: "15"
           SCROLL_WAIT_S: "3.0"
-          LIMIT_EVENTS: "0"     # 0 = sin límite
+          LIMIT_EVENTS: "0"
           OUT_DIR: "./output"
         run: |
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
@@ -150,7 +150,6 @@ jobs:
           set -e
           [ -f output/01events.json.gz ] && gzip -t output/01events.json.gz
           [ -f output/02participants.json.gz ] && gzip -t output/02participants.json.gz
-
           python - <<'PY'
           import gzip, json, pathlib, sys
           p = pathlib.Path("output/02participants.json.gz")
@@ -163,7 +162,7 @@ jobs:
           print("✅ GZ OK, participantes:", len(data))
           PY
 
-      # ========= SUBIDA FTP ROBUSTA (sin QUOT / sin rename) =========
+      # ========= SUBIDA FTP ROBUSTA (lftp, SIN HEREDOC) =========
       - name: Upload to FTP (gz only, robust with lftp)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
@@ -181,7 +180,7 @@ jobs:
           sudo apt-get install -y lftp
 
           REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
-          echo "Subiendo a: ${FTP_SERVER}${REMOTE_DIR}"
+          echo "Subiendo a: ftp://${FTP_SERVER}${REMOTE_DIR}"
 
           upload_one () {
             local SRC="$1"
@@ -190,19 +189,18 @@ jobs:
 
             # 1) Intento FTPS
             set +e
-            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP
-set ftp:passive-mode true
-set ftp:ssl-force true
-set ftp:ssl-protect-data true
-set ssl:verify-certificate no
-set net:max-retries 5
-set net:reconnect-interval-base 3
-set net:timeout 30
-set xfer:clobber on
-cd "${REMOTE_DIR}"
-put "${SRC}" -o "${DST}"
-bye
-LFTP
+            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" -e "\
+              set ftp:passive-mode true; \
+              set ftp:ssl-force true; \
+              set ftp:ssl-protect-data true; \
+              set ssl:verify-certificate no; \
+              set net:max-retries 5; \
+              set net:reconnect-interval-base 3; \
+              set net:timeout 30; \
+              set xfer:clobber on; \
+              cd ${REMOTE_DIR}; \
+              put ${SRC} -o ${DST}; \
+              bye"
             rc=$?
             set -e
 
@@ -214,18 +212,18 @@ LFTP
             echo "⚠️ FTPS falló (rc=$rc). Probando FTP sin TLS…"
 
             # 2) Fallback FTP plano
-            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP
-set ftp:passive-mode true
-set ftp:ssl-force false
-set ftp:ssl-protect-data false
-set net:max-retries 5
-set net:reconnect-interval-base 3
-set net:timeout 30
-set xfer:clobber on
-cd "${REMOTE_DIR}"
-put "${SRC}" -o "${DST}"
-bye
-LFTP
+            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" -e "\
+              set ftp:passive-mode true; \
+              set ftp:ssl-force false; \
+              set ftp:ssl-protect-data false; \
+              set net:max-retries 5; \
+              set net:reconnect-interval-base 3; \
+              set net:timeout 30; \
+              set xfer:clobber on; \
+              cd ${REMOTE_DIR}; \
+              put ${SRC} -o ${DST}; \
+              bye"
+
             echo "✅ OK (FTP): ${DST}"
           }
 
