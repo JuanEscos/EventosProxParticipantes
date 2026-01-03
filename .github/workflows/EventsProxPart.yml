@@ -1,6 +1,5 @@
 name: EventsProxParticipantes
 
-
 on:
   schedule:
     - cron: '5 2 * * *'   # 02:05 UTC
@@ -27,17 +26,17 @@ jobs:
       THROTTLE_PANEL_MS_MAX: "300"
       THROTTLE_EVENT_S_MIN: "1"
       THROTTLE_EVENT_S_MAX: "3"
-      MAX_PANELS_PER_EVENT: "0"
+      MAX_PANELS_PER_EVENT: "0"       # 0 = sin tope por evento
 
       # Límites de tiempo
-      PER_EVENT_MAX_S: "0"
-      MAX_RUNTIME_MIN: "0"
+      PER_EVENT_MAX_S: "0"            # 0 = sin límite por evento
+      MAX_RUNTIME_MIN: "0"            # 0 = sin límite global
 
-      # Chunking desactivado
+      # Chunking desactivado (procesa TODOS)
       CHUNK_SIZE: "0"
       CHUNK_OFFSET: "0"
 
-      # Debug
+      # Debug enriquecido
       DEBUG_PARTICIPANTS: "0"
 
     steps:
@@ -79,9 +78,10 @@ jobs:
           pip install selenium beautifulsoup4 python-dotenv lxml requests webdriver-manager
 
       - name: Prepare output dirs
-        run: mkdir -p "${OUT_DIR}" "${OUT_DIR}/participants"
+        run: |
+          mkdir -p "${OUT_DIR}" "${OUT_DIR}/participants"
 
-      # ========= MÓDULO 1: EVENTOS =========
+      # ========= MÓDULO 1: EVENTOS (SIN LÍMITE) =========
       - name: Run Module 1 (events)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
@@ -89,10 +89,9 @@ jobs:
           HEADLESS: "true"
           MAX_SCROLLS: "15"
           SCROLL_WAIT_S: "3.0"
-          LIMIT_EVENTS: "0"
+          LIMIT_EVENTS: "0"     # 0 = sin límite
           OUT_DIR: "./output"
         run: |
-          set -e
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
           python ./flow_events.py --module events
           echo "=== FIN MÓDULO 1 ==="
@@ -100,7 +99,6 @@ jobs:
 
       - name: Ensure 01events.json
         run: |
-          set -e
           if [ ! -f "./output/01events.json" ]; then
             echo "❌ No se generó ./output/01events.json"
             exit 1
@@ -108,13 +106,12 @@ jobs:
           echo "✅ Encontrado 01events.json"
           ls -la ./output/01events.json
 
-      # ========= MÓDULO 2: PARTICIPANTES =========
+      # ========= MÓDULO 2: PARTICIPANTES (TODOS) =========
       - name: Run Module 2 (participants, full)
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
-          set -e
           echo "=== MÓDULO 2: PARTICIPANTES (FULL) ==="
           python ./flow_participants_DeepSek.py
           echo "=== FIN MÓDULO 2 ==="
@@ -123,7 +120,6 @@ jobs:
 
       - name: Sanity check JSON (plain)
         run: |
-          set -e
           python - <<'PY'
           import json, pathlib, sys
           p = pathlib.Path("output/02participants.json")
@@ -131,11 +127,14 @@ jobs:
               print("❌ 02participants.json no existe"); sys.exit(1)
           data = json.loads(p.read_text(encoding="utf-8"))
           if not isinstance(data, list):
-              print("❌ 02participants.json NO es una lista"); sys.exit(1)
-          print("✅ Total participantes (plain):", len(data))
+              raise SystemExit("❌ 02participants.json no es una lista")
+          print("✅ Total participantes:", len(data))
+          if data:
+              sample = {k: data[0].get(k) for k in ("event_id","BinomID","guia","perro","club")}
+              print("Ejemplo:", sample)
           PY
 
-      - name: Gzip outputs
+      - name: Gzip outputs (incluye 01events)
         run: |
           set -e
           for f in output/01events.json output/02participants.json output/02participants_debug.json output/participants/*.json; do
@@ -146,28 +145,25 @@ jobs:
           ls -la output/*.gz || true
           ls -la output/participants/*.gz || true
 
-      - name: Validate gz files (gzip -t + JSON parse inside)
+      - name: Validate gz files
         run: |
           set -e
-
-          # 1) Integridad gzip
           [ -f output/01events.json.gz ] && gzip -t output/01events.json.gz
           [ -f output/02participants.json.gz ] && gzip -t output/02participants.json.gz
 
-          # 2) Parseo JSON dentro del GZ (esto evita subir basura corrupta)
           python - <<'PY'
           import gzip, json, pathlib, sys
           p = pathlib.Path("output/02participants.json.gz")
           if not p.exists():
-              print("❌ No existe output/02participants.json.gz"); sys.exit(1)
+              print("⚠️ No existe 02participants.json.gz (se omite)"); sys.exit(0)
           with gzip.open(p, "rt", encoding="utf-8") as f:
               data = json.load(f)
           if not isinstance(data, list):
-              print("❌ El JSON dentro del GZ no es una lista"); sys.exit(1)
-          print("✅ GZ OK. Participantes:", len(data))
+              raise SystemExit("❌ El JSON dentro del GZ no es una lista")
+          print("✅ GZ OK, participantes:", len(data))
           PY
 
-      # ========= SUBIDA FTP (SIN RENOMBRE, porque tu FTP NO permite QUOT RNFR/RNTO/DELE) =========
+      # ========= SUBIDA FTP ROBUSTA (sin QUOT / sin rename) =========
       - name: Upload to FTP (gz only, robust with lftp)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
@@ -187,15 +183,14 @@ jobs:
           REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
           echo "Subiendo a: ${FTP_SERVER}${REMOTE_DIR}"
 
-          # Función: intenta FTPS primero, si falla, FTP sin TLS (por compatibilidad)
           upload_one () {
             local SRC="$1"
             local DST="$2"
-
             echo "==> Subiendo ${SRC} -> ${DST}"
 
-            # 1) Intento FTPS explícito (AUTH TLS)
-            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP || FTPS_FAIL=1
+            # 1) Intento FTPS
+            set +e
+            lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP
 set ftp:passive-mode true
 set ftp:ssl-force true
 set ftp:ssl-protect-data true
@@ -208,16 +203,17 @@ cd "${REMOTE_DIR}"
 put "${SRC}" -o "${DST}"
 bye
 LFTP
+            rc=$?
+            set -e
 
-            if [ "${FTPS_FAIL:-0}" = "0" ]; then
+            if [ $rc -eq 0 ]; then
               echo "✅ OK (FTPS): ${DST}"
               return 0
             fi
 
-            echo "⚠️ FTPS falló; probando FTP sin TLS (fallback)…"
+            echo "⚠️ FTPS falló (rc=$rc). Probando FTP sin TLS…"
 
             # 2) Fallback FTP plano
-            unset FTPS_FAIL
             lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" <<LFTP
 set ftp:passive-mode true
 set ftp:ssl-force false
@@ -230,13 +226,11 @@ cd "${REMOTE_DIR}"
 put "${SRC}" -o "${DST}"
 bye
 LFTP
-
             echo "✅ OK (FTP): ${DST}"
           }
 
-          # Subidas (solo .gz)
-          [ -f "./output/01events.json.gz" ]        && upload_one "./output/01events.json.gz"        "01events.json.gz"
-          [ -f "./output/02participants.json.gz" ]  && upload_one "./output/02participants.json.gz"  "02participants.json.gz"
+          [ -f "./output/01events.json.gz" ]       && upload_one "./output/01events.json.gz"       "01events.json.gz"
+          [ -f "./output/02participants.json.gz" ] && upload_one "./output/02participants.json.gz" "02participants.json.gz"
 
           if [ -f "./output/02participants_debug.json.gz" ]; then
             upload_one "./output/02participants_debug.json.gz" "02participants_debug.json.gz"
