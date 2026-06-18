@@ -163,7 +163,7 @@ jobs:
           PY
 
       # ========= SUBIDA FTP ROBUSTA (lftp, SIN HEREDOC) =========
-      - name: Upload to FTP (gz only, robust with lftp)
+      - name: Upload to FTP (gz only, robust with retries)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
@@ -173,7 +173,8 @@ jobs:
           set -e
 
           if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USERNAME" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_REMOTE_DIR" ]; then
-            echo "Variables FTP no configuradas"; exit 1
+            echo "❌ Variables FTP no configuradas"
+            exit 1
           fi
 
           sudo apt-get update
@@ -182,49 +183,96 @@ jobs:
           REMOTE_DIR="${FTP_REMOTE_DIR}/Competiciones/EventosProx/Flow/data"
           echo "Subiendo a: ftp://${FTP_SERVER}${REMOTE_DIR}"
 
-          upload_one () {
+          upload_one_inner () {
             local SRC="$1"
             local DST="$2"
-            echo "==> Subiendo ${SRC} -> ${DST}"
 
-            # 1) Intento FTPS
-            set +e
+            echo "==> Intentando subir ${SRC} -> ${DST} usando FTPS"
+
             lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" -e "\
+              set cmd:fail-exit yes; \
               set ftp:passive-mode true; \
               set ftp:ssl-force true; \
               set ftp:ssl-protect-data true; \
               set ssl:verify-certificate no; \
-              set net:max-retries 5; \
-              set net:reconnect-interval-base 3; \
-              set net:timeout 30; \
+              set net:max-retries 8; \
+              set net:reconnect-interval-base 10; \
+              set net:reconnect-interval-multiplier 2; \
+              set net:timeout 60; \
               set xfer:clobber on; \
               cd ${REMOTE_DIR}; \
+              mkdir -p participants; \
               put ${SRC} -o ${DST}; \
               bye"
-            rc=$?
-            set -e
+          }
 
-            if [ $rc -eq 0 ]; then
-              echo "✅ OK (FTPS): ${DST}"
-              return 0
-            fi
+          upload_one_inner_ftp () {
+            local SRC="$1"
+            local DST="$2"
 
-            echo "⚠️ FTPS falló (rc=$rc). Probando FTP sin TLS…"
+            echo "==> Intentando subir ${SRC} -> ${DST} usando FTP sin TLS"
 
-            # 2) Fallback FTP plano
             lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "ftp://${FTP_SERVER}" -e "\
+              set cmd:fail-exit yes; \
               set ftp:passive-mode true; \
               set ftp:ssl-force false; \
               set ftp:ssl-protect-data false; \
-              set net:max-retries 5; \
-              set net:reconnect-interval-base 3; \
-              set net:timeout 30; \
+              set net:max-retries 8; \
+              set net:reconnect-interval-base 10; \
+              set net:reconnect-interval-multiplier 2; \
+              set net:timeout 60; \
               set xfer:clobber on; \
               cd ${REMOTE_DIR}; \
+              mkdir -p participants; \
               put ${SRC} -o ${DST}; \
               bye"
+          }
 
-            echo "✅ OK (FTP): ${DST}"
+          upload_one () {
+            local SRC="$1"
+            local DST="$2"
+
+            echo ""
+            echo "===================================================="
+            echo "Subiendo archivo: ${SRC}"
+            echo "Destino remoto: ${DST}"
+            echo "===================================================="
+
+            for attempt in 1 2 3 4; do
+              echo "Intento global ${attempt}/4 para ${DST}"
+
+              set +e
+              upload_one_inner "$SRC" "$DST"
+              rc=$?
+              set -e
+
+              if [ $rc -eq 0 ]; then
+                echo "✅ OK por FTPS: ${DST}"
+                return 0
+              fi
+
+              echo "⚠️ FTPS falló para ${DST} con rc=${rc}"
+
+              set +e
+              upload_one_inner_ftp "$SRC" "$DST"
+              rc=$?
+              set -e
+
+              if [ $rc -eq 0 ]; then
+                echo "✅ OK por FTP: ${DST}"
+                return 0
+              fi
+
+              echo "⚠️ FTP también falló para ${DST} con rc=${rc}"
+
+              if [ "$attempt" -lt 4 ]; then
+                echo "Esperando 60 segundos antes de reintentar..."
+                sleep 60
+              fi
+            done
+
+            echo "❌ No se pudo subir ${DST} después de varios intentos"
+            return 1
           }
 
           [ -f "./output/01events.json.gz" ]       && upload_one "./output/01events.json.gz"       "01events.json.gz"
@@ -239,7 +287,6 @@ jobs:
             base=$(basename "$f")
             upload_one "$f" "participants/${base}"
           done
-
       - name: Upload artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
