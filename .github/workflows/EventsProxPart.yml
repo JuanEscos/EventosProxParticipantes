@@ -60,12 +60,16 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y wget gnupg unzip
+
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
+
           CHROME_VERSION=$(google-chrome-stable --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
           URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+
           if wget -q --spider "$URL"; then
             wget -O /tmp/chromedriver.zip "$URL"
             unzip -o /tmp/chromedriver.zip -d /tmp/
@@ -75,20 +79,23 @@ jobs:
             sudo apt-get install -y chromium-chromedriver
             sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
           fi
+
           which google-chrome-stable && google-chrome-stable --version
           which chromedriver && chromedriver --version
 
       - name: Install Python deps
         run: |
+          set -e
           python -m pip install --upgrade pip
           pip install selenium beautifulsoup4 python-dotenv lxml requests webdriver-manager
 
       - name: Prepare output dirs
         run: |
+          set -e
           mkdir -p "${OUT_DIR}" "${OUT_DIR}/participants"
 
       # ========= MÓDULO 1: EVENTOS =========
-      - name: Run Module 1 (events)
+      - name: Run Module 1 events
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
@@ -98,6 +105,7 @@ jobs:
           LIMIT_EVENTS: "0"
           OUT_DIR: "./output"
         run: |
+          set -e
           echo "=== MÓDULO 1: EXTRACCIÓN DE EVENTOS ==="
           python ./flow_events.py --module events
           echo "=== FIN MÓDULO 1 ==="
@@ -105,19 +113,23 @@ jobs:
 
       - name: Ensure 01events.json
         run: |
+          set -e
+
           if [ ! -f "./output/01events.json" ]; then
             echo "❌ No se generó ./output/01events.json"
             exit 1
           fi
+
           echo "✅ Encontrado 01events.json"
           ls -la ./output/01events.json
 
       # ========= MÓDULO 2: PARTICIPANTES =========
-      - name: Run Module 2 (participants, full)
+      - name: Run Module 2 participants full
         env:
           FLOW_EMAIL: ${{ secrets.FLOW_EMAILRQ }}
           FLOW_PASS:  ${{ secrets.FLOW_PASSRQ }}
         run: |
+          set -e
           echo "=== MÓDULO 2: PARTICIPANTES (FULL) ==="
           python ./flow_participants_DeepSek.py
           echo "=== FIN MÓDULO 2 ==="
@@ -126,6 +138,8 @@ jobs:
 
       - name: Sanity check JSON plain
         run: |
+          set -e
+
           python - <<'PY'
           import json, pathlib, sys
 
@@ -200,6 +214,12 @@ jobs:
             output/participants/*.json.gz
           retention-days: 10
 
+      - name: Instalar cliente SFTP
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
       # ========= SUBIDA SFTP POR SSH =========
       - name: Upload to SFTP SSH 22
         id: sftp_upload
@@ -215,10 +235,7 @@ jobs:
             exit 1
           fi
 
-          sudo apt-get update
-          sudo apt-get install -y lftp
-
-          REMOTE_DIR="/www/NewWeb/Privado/Competiciones/EventosProx/Flow/data"
+          REMOTE_DIR="www/NewWeb/Privado/Competiciones/EventosProx/Flow/data"
 
           echo "Subiendo por SFTP a:"
           echo "Servidor: ${FTP_SERVER}"
@@ -235,17 +252,25 @@ jobs:
             echo "Destino remoto: ${DST}"
             echo "===================================================="
 
+            if [ ! -f "$SRC" ]; then
+              echo "❌ No existe el archivo local: $SRC"
+              return 1
+            fi
+
             for attempt in 1 2 3 4 5; do
               echo "Intento SFTP ${attempt}/5 para ${DST}"
 
               set +e
-              lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "sftp://${FTP_SERVER}:22" -e "\
+              timeout 180 lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "sftp://${FTP_SERVER}:22" -e "\
                 set cmd:fail-exit yes; \
-                set net:timeout 60; \
-                set net:max-retries 3; \
-                set net:reconnect-interval-base 20; \
+                set net:timeout 30; \
+                set net:max-retries 1; \
+                set net:reconnect-interval-base 10; \
                 set sftp:auto-confirm yes; \
+                set sftp:connect-program 'ssh -a -x -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=2'; \
+                pwd; \
                 cd ${REMOTE_DIR}; \
+                pwd; \
                 mkdir -p participants; \
                 put ${SRC} -o ${DST}; \
                 bye"
@@ -257,11 +282,15 @@ jobs:
                 return 0
               fi
 
-              echo "⚠️ Falló SFTP para ${DST} con rc=${rc}"
+              if [ "$rc" -eq 124 ]; then
+                echo "⚠️ Timeout: el intento SFTP se quedó colgado y fue cancelado automáticamente"
+              else
+                echo "⚠️ Falló SFTP para ${DST} con rc=${rc}"
+              fi
 
               if [ "$attempt" -lt 5 ]; then
-                echo "Esperando 60 segundos antes de reintentar..."
-                sleep 60
+                echo "Esperando 30 segundos antes de reintentar..."
+                sleep 30
               fi
             done
 
@@ -291,21 +320,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y lftp
-
-          REMOTE_DIR="/www/NewWeb/Privado/Competiciones/EventosProx/Flow/data"
+          REMOTE_DIR="www/NewWeb/Privado/Competiciones/EventosProx/Flow/data"
 
           echo "Verificando archivos principales en SFTP..."
 
-          lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "sftp://${FTP_SERVER}:22" -e "\
+          timeout 120 lftp -u "${FTP_USERNAME},${FTP_PASSWORD}" "sftp://${FTP_SERVER}:22" -e "\
             set cmd:fail-exit yes; \
-            set net:timeout 60; \
-            set net:max-retries 3; \
-            set net:reconnect-interval-base 20; \
+            set net:timeout 30; \
+            set net:max-retries 1; \
             set sftp:auto-confirm yes; \
+            set sftp:connect-program 'ssh -a -x -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=2'; \
+            pwd; \
             cd ${REMOTE_DIR}; \
-            cls -l; \
+            pwd; \
+            cls -l 01events.json.gz; \
+            cls -l 02participants.json.gz; \
+            cls -l participants; \
             bye"
 
           echo "✅ Verificación básica SFTP completada"
