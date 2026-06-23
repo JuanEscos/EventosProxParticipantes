@@ -271,7 +271,6 @@ jobs:
                 pwd; \
                 cd ${REMOTE_DIR}; \
                 pwd; \
-                mkdir -p participants; \
                 put ${SRC} -o ${DST}; \
                 bye"
               rc=$?
